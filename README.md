@@ -22,7 +22,7 @@ docker run -d \
   -p 20000:20000 \
   -e PSK="your_psk_here" \
   --restart unless-stopped \
-  ghcr.io/yourusername/snell:latest
+  ghcr.io/cary17/snell:latest
 ```
 
 ### Docker Compose
@@ -34,7 +34,7 @@ version: '3.8'
 
 services:
   snell:
-    image: ghcr.io/yourusername/snell:latest
+    image: ghcr.io/cary17/snell:latest
     container_name: snell
     restart: unless-stopped
     ports:
@@ -118,14 +118,14 @@ tfo = true
 
 ### GHCR (推荐)
 ```bash
-ghcr.io/yourusername/snell:latest
-ghcr.io/yourusername/snell:5.0.1
+ghcr.io/cary17/snell:latest
+ghcr.io/cary17/snell:5.0.1
 ```
 
 ### Docker Hub
 ```bash
-yourusername/snell:latest
-yourusername/snell:5.0.1
+cary17/snell:latest
+cary17e/snell:5.0.1
 ```
 
 ### 可用标签
