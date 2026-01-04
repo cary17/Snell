@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  snell:
+    image: ghcr.io/yourusername/snell:latest
+    container_name: snell
+    restart: unless-stopped
+    
+    ports:
+      - "20000:20000"
+    
+    environment:
+      # 必需配置
+      - PSK=your_psk_here_change_me
+      
+      # 基础配置
+      - PORT=20000                    # 监听端口（默认20000）
+      - IPV6=false                    # 启用IPv6（默认false）
+      
+      # 可选配置（不需要时删除或注释掉）
+      - DNS=8.8.8.8, 1.0.0.1         # DNS服务器
+      # - EGRESS_INTERFACE=eth0        # 出口网络接口（需要 root 权限）
+      # - OBFS=http                    # 混淆模式（http/tls）
+      # - HOST=example.com             # 混淆主机名
+      # - TFO=true                     # TCP Fast Open
+      
+      # 高级配置
+      # - LISTEN=:::20000              # 完整监听配置（会覆盖PORT）
+      # - LOG=notify                   # 日志级别（notify/info/verbose）
+
+# ============================================
+# 配置说明
+# ============================================
+# 
+# 必需配置：
+#   PSK: 预共享密钥（强烈建议修改默认值）
+#
+# 可选配置只在需要时添加，不需要的直接删除或注释：
+#   - DNS: 自定义DNS服务器
+#   - EGRESS_INTERFACE: 指定出口网络接口（需要 root 权限和路由表）
+#   - OBFS: 启用混淆（需配合HOST使用）
+#   - HOST: 混淆域名
+#   - TFO: 启用TCP Fast Open
+#
+# 注意：
+#   - 未配置的选项不会出现在 snell.conf 中
+#   - egress-interface 需要该接口有目标地址和 DNS 的路由表
+#   - 容器使用 root 用户运行以支持特权功能
+# ============================================
+
+# 多实例示例（取消注释使用）
+#  snell-2:
+#    image: ghcr.io/yourusername/snell:latest
+#    container_name: snell-2
+#    restart: unless-stopped
+#    ports:
+#      - "20001:20001"
+#    environment:
+#      - PORT=20001
+#      - PSK=another_psk_here
+#      - IPV6=false
