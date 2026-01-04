@@ -1,0 +1,36 @@
+# Docker
+*.log
+snell.conf
+
+# Snell 下载文件（如果不想提交到仓库，取消注释下面两行）
+# Version/**/*.zip
+# !Version/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Secrets
+.env
+.env.local
+secrets/
+*.key
+*.pem
+
+# Build
+build/
+dist/
+*.tar.gz
+
+# Temporary
+tmp/
+temp/
+*.tmp
