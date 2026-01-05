@@ -64,8 +64,6 @@ docker-compose up -d
 | `EGRESS_INTERFACE` | 出口网络接口（需要 root 权限） | - | 否 |
 | `OBFS` | 混淆模式（`http`/`tls`） | - | 否 |
 | `HOST` | 混淆主机名 | - | 否 |
-| `TFO` | TCP Fast Open | - | 否 |
-| `LOG` | 日志级别 | `notify` | 否 |
 
 > **⚠️ 重要提示**: 
 > - `egress-interface` 参数需要容器以 root 权限运行（本镜像默认使用 root）
