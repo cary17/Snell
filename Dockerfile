@@ -6,18 +6,12 @@ ARG SNELL_VERSION
 ARG USE_LOCAL=false
 
 # 安装必要工具
-RUN if [ "${USE_LOCAL}" != "true" ]; then \
-        apt-get update && \
-        apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
         ca-certificates \
         wget \
         unzip && \
-        rm -rf /var/lib/apt/lists/*; \
-    else \
-        apt-get update && \
-        apt-get install -y --no-install-recommends unzip && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
+    rm -rf /var/lib/apt/lists/*
 
 # 创建工作目录
 RUN mkdir -p /tmp/snell
@@ -32,31 +26,31 @@ RUN set -ex && \
         amd64) ARCH="amd64" ;; \
         386) ARCH="i386" ;; \
         arm64) ARCH="aarch64" ;; \
-        arm/v7|arm) ARCH="armv7l" ;; \
+        arm) ARCH="armv7l" ;; \
         *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
     echo "→ Target Architecture: ${TARGETARCH}" && \
     echo "→ Snell Architecture: ${ARCH}" && \
     echo "→ Snell Version: ${SNELL_VERSION}" && \
-    # 下载或使用仓库文件
-    if [ "${USE_LOCAL}" = "true" ]; then \
-        FILE_PATH="/tmp/Version/${SNELL_VERSION}/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip"; \
-        echo "→ 检查仓库文件: ${FILE_PATH}"; \
-        if [ -f "${FILE_PATH}" ]; then \
-            echo "✓ 使用仓库文件"; \
-            cp "${FILE_PATH}" /tmp/snell.zip; \
-        else \
-            echo "⚠ 仓库文件不存在，回退到官方下载"; \
-            DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip"; \
-            echo "→ 下载地址: ${DOWNLOAD_URL}"; \
-            wget -O /tmp/snell.zip "${DOWNLOAD_URL}"; \
-        fi; \
+    FILE_PATH="/tmp/Version/${SNELL_VERSION}/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip" && \
+    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip" && \
+    \
+    if [ "${USE_LOCAL}" = "true" ] && [ -f "${FILE_PATH}" ]; then \
+        echo "✓ 使用仓库中的 Snell 文件"; \
+        cp "${FILE_PATH}" /tmp/snell.zip; \
     else \
-        DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip"; \
-        echo "→ 官方下载: ${DOWNLOAD_URL}"; \
-        wget -O /tmp/snell.zip "${DOWNLOAD_URL}"; \
+        echo "→ 尝试官方下载: ${DOWNLOAD_URL}"; \
+        if ! wget -O /tmp/snell.zip "${DOWNLOAD_URL}"; then \
+            echo "⚠ 官方下载失败，尝试使用仓库文件"; \
+            if [ -f "${FILE_PATH}" ]; then \
+                echo "✓ 回退使用仓库文件"; \
+                cp "${FILE_PATH}" /tmp/snell.zip; \
+            else \
+                echo "❌ 官方下载失败，仓库中也不存在对应文件"; \
+                exit 1; \
+            fi; \
+        fi; \
     fi && \
-    # 解压并设置权限
     unzip /tmp/snell.zip -d /tmp/snell && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
@@ -88,5 +82,4 @@ WORKDIR /snell
 
 EXPOSE 20000
 
-# 使用 root 用户运行（egress-interface 需要 root 权限）
 ENTRYPOINT ["/snell/entrypoint.sh"]
