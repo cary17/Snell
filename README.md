@@ -97,7 +97,6 @@ environment:
   - DNS=8.8.8.8, 1.0.0.1
   - OBFS=http
   - HOST=example.com
-  - TFO=true
 ```
 
 生成的 `snell.conf`：
@@ -109,7 +108,6 @@ ipv6 = true
 dns = 8.8.8.8, 1.0.0.1
 obfs = http
 host = example.com
-tfo = true
 ```
 
 ## 📦 镜像仓库
