@@ -247,7 +247,7 @@ jobs:
               --name Snell \
               --restart always \
               --network host \
-              -e PORT=26615 \
+              -e PORT=20000 \
               -e PSK="your_psk_here" \
               ghcr.io/${{ github.repository_owner }}/snell:${{ steps.prep.outputs.version }}
             ```
