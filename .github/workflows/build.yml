@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell版本号（如：5.0.1，留空使用最新版本）'
+        description: 'Snell版本号（如：v5.0.1、v5.0.0b2，留空使用最新版本）'
         required: false
         type: string
       debian:
@@ -43,29 +43,35 @@ jobs:
       - name: 获取 Snell 版本
         id: get_version
         run: |
+          normalize() {
+            v="$1"
+            [[ "$v" != v* ]] && v="v$v"
+            echo "$v"
+          }
+
           if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+            VERSION="$(normalize "${{ inputs.version }}")"
             echo "✓ 使用指定版本: $VERSION"
           else
             echo "→ 检测最新版本..."
-            # 方法1: 从 Release Notes 页面提取
             VERSION=$(curl -sL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | \
-              grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
-              sort -Vru | head -n 1)
-            
-            # 方法2: 如果方法1失败，尝试解析下载页面
+              grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+([a-z]+[0-9]+)?' | \
+              sed 's/^/v/' | sort -Vru | head -n 1)
+
             if [ -z "$VERSION" ]; then
               VERSION=$(curl -sL https://dl.nssurge.com/snell/ 2>/dev/null | \
-                grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
-                sort -Vru | head -n 1)
+                grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+([a-z]+[0-9]+)?' | \
+                sed 's/^/v/' | sort -Vru | head -n 1)
             fi
-            
+
             if [ -z "$VERSION" ]; then
               echo "✗ 无法获取版本号"
               exit 1
             fi
+
             echo "✓ 检测到最新版本: $VERSION"
           fi
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: 检查仓库中是否有该版本的文件
@@ -73,10 +79,9 @@ jobs:
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
           USE_REPO="${{ inputs.use_repo_files }}"
-          
+
           if [ "$USE_REPO" = "true" ] || [ -z "$USE_REPO" ]; then
-            # 检查是否有至少一个平台的文件
-            if ls Version/${VERSION}/snell-server-v${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
+            if ls Version/${VERSION}/snell-server-${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
               echo "✓ 仓库中存在版本 ${VERSION} 的文件"
               echo "has_files=true" >> $GITHUB_OUTPUT
             else
@@ -93,14 +98,13 @@ jobs:
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
           FORCE="${{ inputs.force }}"
-          
+
           if [ "$FORCE" = "true" ]; then
             echo "✓ 强制构建模式"
             echo "should_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
-          # 检查 GHCR 是否已存在该版本
+
           if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:$VERSION >/dev/null 2>&1; then
             echo "→ 版本 $VERSION 已存在于 GHCR"
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -117,7 +121,6 @@ jobs:
       - name: Checkout 代码
         uses: actions/checkout@v4
         with:
-          # 确保获取完整的仓库内容，包括 Version 目录
           fetch-depth: 0
 
       - name: Set up QEMU
@@ -146,10 +149,9 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           DEBIAN="${{ inputs.debian || 'bookworm' }}"
           USE_REPO="${{ inputs.use_repo_files }}"
-          
-          # 检查是否使用仓库文件
+
           if [ "$USE_REPO" = "true" ]; then
-            if ls Version/${VERSION}/snell-server-v${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
+            if ls Version/${VERSION}/snell-server-${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
               USE_LOCAL="true"
               echo "✓ 将使用仓库中的文件"
             else
@@ -160,24 +162,21 @@ jobs:
             USE_LOCAL="false"
             echo "→ 将从官方下载"
           fi
-          
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "debian=$DEBIAN" >> $GITHUB_OUTPUT
           echo "use_local=$USE_LOCAL" >> $GITHUB_OUTPUT
-          
-          # 构建镜像标签
+
           GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
           TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
-          
-          # 如果配置了 Docker Hub
+
           if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
             DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
             TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
           fi
-          
+
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
-          
-          echo ""
+
           echo "📦 构建信息:"
           echo "  版本: $VERSION"
           echo "  Debian: $DEBIAN"
@@ -187,7 +186,6 @@ jobs:
       - name: 创建空 Version 目录（如果不存在）
         run: |
           mkdir -p Version
-          # 创建一个空的 .gitkeep 文件
           touch Version/.gitkeep
 
       - name: 列出 Version 目录内容
@@ -212,68 +210,42 @@ jobs:
       - name: 创建 Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.prep.outputs.version }}
-          name: Snell v${{ steps.prep.outputs.version }}
+          tag_name: ${{ steps.prep.outputs.version }}
+          name: Snell ${{ steps.prep.outputs.version }}
           body: |
-            ## 🚀 Snell Server v${{ steps.prep.outputs.version }}
-            
+            ## 🚀 Snell Server ${{ steps.prep.outputs.version }}
+
             **基础镜像:** Debian ${{ steps.prep.outputs.debian }}
             **构建方式:** ${{ steps.prep.outputs.use_local == 'true' && '使用仓库文件' || '官方下载' }}
-            
+
             ### 📦 镜像地址
-            
+
             **GitHub Container Registry:**
             ```bash
             docker pull ghcr.io/${{ github.repository_owner }}/snell:${{ steps.prep.outputs.version }}
             docker pull ghcr.io/${{ github.repository_owner }}/snell:latest
             ```
-            
+
             **Docker Hub:** ${{ secrets.DOCKER_HUB_USERNAME != '' && format('
             ```bash
             docker pull {0}/snell:{1}
             docker pull {0}/snell:latest
             ```', secrets.DOCKER_HUB_USERNAME, steps.prep.outputs.version) || '（未配置）' }}
-            
+
             ### 🏗️ 支持平台
-            - `linux/amd64` - x86_64
-            - `linux/386` - x86 (32-bit)  
-            - `linux/arm64` - ARM64/aarch64
-            - `linux/arm/v7` - ARMv7
-            
-            ### 📚 快速开始
-            
-            ```bash
-            docker run -d \
-              --name Snell \
-              --restart always \
-              --network host \
-              -e PORT=20000 \
-              -e PSK="your_psk_here" \
-              ghcr.io/${{ github.repository_owner }}/snell:${{ steps.prep.outputs.version }}
-            ```
-            
-            ### ⚠️ 重要提示
-            
-            - 🔑 **必须修改 PSK**: 请使用强随机字符串
-            - 🔧 **egress-interface**: 需要 root 权限或 CAP_NET_RAW/CAP_NET_ADMIN
-            - 📝 **配置说明**: 查看仓库 README.md
-            
-            ### 🔗 相关链接
-            - [Snell Release Notes](https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell)
-            - [项目文档](https://github.com/${{ github.repository }})
-          draft: false
-          prerelease: false
+            - `linux/amd64`
+            - `linux/386`
+            - `linux/arm64`
+            - `linux/arm/v7`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 构建摘要
         run: |
           echo "### ✅ 构建完成" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**版本:** ${{ steps.prep.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "**Debian:** ${{ steps.prep.outputs.debian }}" >> $GITHUB_STEP_SUMMARY
           echo "**构建方式:** ${{ steps.prep.outputs.use_local == 'true' && '使用仓库文件' || '官方下载' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**镜像标签:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.prep.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
