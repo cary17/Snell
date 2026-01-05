@@ -18,10 +18,11 @@
 
 ```bash
 docker run -d \
-  --name snell \
-  -p 20000:20000 \
+  --name Snell \
+  --restart always \
+  --network host \
+  -e PORT=26615 \
   -e PSK="your_psk_here" \
-  --restart unless-stopped \
   ghcr.io/cary17/snell:latest
 ```
 
@@ -33,15 +34,15 @@ docker run -d \
 version: '3.8'
 
 services:
-  snell:
+  Snell-server:
     image: ghcr.io/cary17/snell:latest
-    container_name: snell
-    restart: unless-stopped
-    ports:
-      - "20000:20000"
+    container_name: Snell
+    restart: always
+    network_mode: host
     environment:
-      - PSK=your_psk_here_change_me
-      - IPV6=false
+      PORT: 2000
+      PSK: your_secure_psk_here
+      IPV6: true
 ```
 
 启动服务：
@@ -76,7 +77,7 @@ docker-compose up -d
 
 ```yaml
 environment:
-  - PSK=your_secure_psk_here
+  PSK: your_secure_psk_here
 ```
 
 生成的 `snell.conf`：
@@ -91,12 +92,12 @@ ipv6 = false
 
 ```yaml
 environment:
-  - PSK=your_secure_psk
-  - PORT=20000
-  - IPV6=true
-  - DNS=8.8.8.8, 1.0.0.1
-  - OBFS=http
-  - HOST=example.com
+  PSK: your_secure_psk
+  PORT: 20000
+  IPV6: true
+  DNS: 8.8.8.8, 1.0.0.1
+  OBFS: http
+  HOST: example.com
 ```
 
 生成的 `snell.conf`：
@@ -127,7 +128,7 @@ cary17e/snell:5.0.1
 ### 可用标签
 
 - `latest` - 最新版本
-- `5.0.1`, `4.1.1` - 特定版本
+- `5.0.1`, `4.1.1`, `3.0.1` - 特定版本
 
 ### 支持平台
 
@@ -330,7 +331,7 @@ telnet <服务器IP> 20000
 
 ```bash
 # Linux/macOS
-openssl rand -base64 32
+openssl rand -base64 16
 
 # 或使用
 head -c 32 /dev/urandom | base64
