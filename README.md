@@ -21,7 +21,7 @@ docker run -d \
   --name Snell \
   --restart always \
   --network host \
-  -e PORT=26615 \
+  -e PORT=20000 \
   -e PSK="your_psk_here" \
   ghcr.io/cary17/snell:latest
 ```
@@ -40,7 +40,7 @@ services:
     restart: always
     network_mode: host
     environment:
-      PORT: 2000
+      PORT: 20000
       PSK: your_secure_psk_here
       IPV6: true
 ```
