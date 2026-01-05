@@ -21,6 +21,7 @@ COPY Version /tmp/Version
 
 # 下载或使用仓库中的 snell-server
 RUN set -ex && \
+    # 映射架构名称
     case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
         386) ARCH="i386" ;; \
@@ -62,15 +63,19 @@ LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-doc
 LABEL org.opencontainers.image.description="Snell Server"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
+# 只安装运行时必需的依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+# 创建工作目录
 RUN mkdir -p /snell
 
+# 从构建阶段复制文件
 COPY --from=builder /tmp/snell/snell-server /snell/snell-server
 COPY entrypoint.sh /snell/entrypoint.sh
 
+# 设置执行权限
 RUN chmod +x /snell/entrypoint.sh /snell/snell-server
 
 WORKDIR /snell
