@@ -2,12 +2,25 @@
 
 set -e
 
-# 默认值
+# 去除变量值中的引号（如果有的话）
 
-DEFAULT_PORT=”${PORT:-20000}”
-DEFAULT_PSK=”${PSK:-RgtvOzILQDPBENgzqeZXsw==}”
-DEFAULT_IPV6=”${IPV6:-false}”
-DEFAULT_LISTEN=”${LISTEN:-:::${DEFAULT_PORT}}”
+strip_quotes() {
+    echo “$1” | sed ‘s/^”(.*)”$/\1/’ | sed “s/^’(.*)’$/\1/”
+}
+
+# 默认值（去除引号）
+
+DEFAULT_PORT=$(strip_quotes “${PORT:-20000}”)
+DEFAULT_PSK=$(strip_quotes “${PSK:-RgtvOzILQDPBENgzqeZXsw==}”)
+DEFAULT_IPV6=$(strip_quotes “${IPV6:-false}”)
+
+# listen 配置
+
+if [ -n “${LISTEN}” ]; then
+    DEFAULT_LISTEN=$(strip_quotes “${LISTEN}”)
+else
+    DEFAULT_LISTEN=”:::${DEFAULT_PORT}”
+fi
 
 # 生成基础配置
 
@@ -20,10 +33,25 @@ EOF
 
 # 只添加已配置的可选项（不添加空值）
 
-[ -n “${DNS}” ] && echo “dns = ${DNS}” >> /snell/snell.conf
-[ -n “${EGRESS_INTERFACE}” ] && echo “egress-interface = ${EGRESS_INTERFACE}” >> /snell/snell.conf
-[ -n “${OBFS}” ] && echo “obfs = ${OBFS}” >> /snell/snell.conf
-[ -n “${HOST}” ] && echo “host = ${HOST}” >> /snell/snell.conf
+if [ -n “${DNS}” ]; then
+    DNS_CLEAN=$(strip_quotes “${DNS}”)
+    [ -n “${DNS_CLEAN}” ] && echo “dns = ${DNS_CLEAN}” >> /snell/snell.conf
+fi
+
+if [ -n “${EGRESS_INTERFACE}” ]; then
+    EGRESS_CLEAN=$(strip_quotes “${EGRESS_INTERFACE}”)
+    [ -n “${EGRESS_CLEAN}” ] && echo “egress-interface = ${EGRESS_CLEAN}” >> /snell/snell.conf
+fi
+
+if [ -n “${OBFS}” ]; then
+    OBFS_CLEAN=$(strip_quotes “${OBFS}”)
+    [ -n “${OBFS_CLEAN}” ] && echo “obfs = ${OBFS_CLEAN}” >> /snell/snell.conf
+fi
+
+if [ -n “${HOST}” ]; then
+    HOST_CLEAN=$(strip_quotes “${HOST}”)
+    [ -n “${HOST_CLEAN}” ] && echo “host = ${HOST_CLEAN}” >> /snell/snell.conf
+fi
 
 echo “Generated snell.conf:”
 cat /snell/snell.conf
@@ -44,7 +72,7 @@ cleanup() {
 
 trap cleanup TERM INT
 
-# 启动 snell-server，日志级别直接在命令行指定
+# 启动 snell-server
 
 echo “Starting snell-server…”
 /snell/snell-server -c /snell/snell.conf -l ${LOG:-notify} &
