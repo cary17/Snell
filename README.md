@@ -61,8 +61,8 @@ docker-compose up -d
 | `PORT` | 监听端口 | `20000` | **建议修改** |
 | `IPV6` | 启用 IPv6 | `false` | 否 |
 | `LISTEN` | 完整监听配置 | `:::${PORT}` | 否 |
-| `DNS` | DNS 服务器（多个用逗号分隔） | - | 否 |
-| `EGRESS_INTERFACE` | 出口网络接口（需要 root 权限） | - | 否 |
+| `DNS` | DNS 服务器（多个用逗号分隔，需v4.1.0及以上版本） | - | 否 |
+| `EGRESS_INTERFACE` | 出口网络接口（需要 root 权限，需v5.0.0及以上版本） | - | 否 |
 | `OBFS` | 混淆模式（`http`/`tls`） | - | 否 |
 | `HOST` | 混淆主机名 | - | 否 |
 
