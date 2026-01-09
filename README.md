@@ -63,8 +63,8 @@ docker-compose up -d
 | `LISTEN` | 完整监听配置 | `:::${PORT}` | 否 |
 | `DNS` | DNS 服务器（多个用逗号分隔，需v4.1.0及以上版本） | - | 否 |
 | `EGRESS_INTERFACE` | 出口网络接口（需要 root 权限，需v5.0.0及以上版本） | - | 否 |
-| `OBFS` | 混淆模式（`http`/`tls`） | - | 否 |
-| `HOST` | 混淆主机名 | - | 否 |
+| `OBFS` | 混淆模式（`http`/`tls`）(v4.0.0及以上不建议设置) | - | 否 |
+| `HOST` | 混淆主机名（设置OBFS后必须设置） | - | 否 |
 
 > **⚠️ 重要提示**: 
 > - `egress-interface` 参数需要容器以 root 权限运行（本镜像默认使用 root）
