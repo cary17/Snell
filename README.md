@@ -57,7 +57,7 @@ docker-compose up -d
 
 | 变量 | 说明 | 默认值 | 是否必需 |
 |------|------|--------|----------|
-| `PSK` | 预共享密钥 | `RgtvOzILQDPBENgzqeZXsw==` | **建议修改** |
+| `PSK` | 预共享密钥 | 通过openssl rand --base64 16生成 | **建议修改** |
 | `PORT` | 监听端口 | `20000` | **建议修改** |
 | `IPV6` | 启用 IPv6 | `false` | 否 |
 | `LISTEN` | 完整监听配置 | `:::${PORT}` | 否 |
