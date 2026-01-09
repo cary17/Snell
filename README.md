@@ -57,8 +57,8 @@ docker-compose up -d
 
 | 变量 | 说明 | 默认值 | 是否必需 |
 |------|------|--------|----------|
-| `PSK` | 预共享密钥 | 通过openssl rand --base64 16生成 | **建议修改** |
 | `PORT` | 监听端口 | `20000` | **建议修改** |
+| `PSK` | 预共享密钥 | 通过openssl rand --base64 16生成 | 否 |
 | `IPV6` | 启用 IPv6 | `false` | 否 |
 | `LISTEN` | 完整监听配置 | `:::${PORT}` | 否 |
 | `DNS` | DNS 服务器（多个用逗号分隔，需v4.1.0及以上版本） | - | 否 |
@@ -95,7 +95,7 @@ environment:
   PSK: your_secure_psk
   PORT: 20000
   IPV6: true
-  DNS: 8.8.8.8, 1.0.0.1
+  DNS: 8.8.8.8, 1.0.0.1, 2001:4860:4860::8888, 2606:4700:4700::1001
   OBFS: http
   HOST: example.com
 ```
@@ -106,7 +106,7 @@ environment:
 listen = :::20000
 psk = your_secure_psk
 ipv6 = true
-dns = 8.8.8.8, 1.0.0.1
+dns = 8.8.8.8, 1.0.0.1, 2001:4860:4860::8888, 2606:4700:4700::1001
 obfs = http
 host = example.com
 ```
