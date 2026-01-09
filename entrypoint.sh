@@ -9,7 +9,15 @@ strip_quotes() {
 
 # 默认值（去除引号）
 DEFAULT_PORT=$(strip_quotes "${PORT:-20000}")
-DEFAULT_PSK=$(strip_quotes "${PSK:-RgtvOzILQDPBENgzqeZXsw==}")
+
+# PSK: 如果未指定则生成随机密码
+if [ -n "${PSK}" ]; then
+    DEFAULT_PSK=$(strip_quotes "${PSK}")
+else
+    DEFAULT_PSK=$(openssl rand -base64 16)
+    echo "⚠ PSK not specified, generated random PSK: ${DEFAULT_PSK}"
+fi
+
 DEFAULT_IPV6=$(strip_quotes "${IPV6:-false}")
 
 # listen 配置
