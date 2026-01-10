@@ -31,12 +31,15 @@ RUN set -ex && \
     echo "→ Version: ${VERSION_NUM}, Arch: ${ARCH}" && \
     DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
     FILE_PATH="/tmp/Version/${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
+    echo "→ 检查仓库文件: ${FILE_PATH}" && \
+    ls -la /tmp/Version/ || true && \
+    ls -la /tmp/Version/${VERSION_NUM}/ || true && \
     if [ "${USE_LOCAL}" = "true" ] && [ -f "${FILE_PATH}" ]; then \
         echo "→ 使用仓库文件: ${FILE_PATH}"; \
         cp "${FILE_PATH}" /tmp/snell.zip; \
     else \
         echo "→ 官方下载: ${DOWNLOAD_URL}"; \
-        if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}"; then \
+        if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
             echo "✓ 下载成功"; \
         else \
             echo "⚠ 下载失败，尝试使用仓库文件"; \
@@ -45,6 +48,7 @@ RUN set -ex && \
                 cp "${FILE_PATH}" /tmp/snell.zip; \
             else \
                 echo "✗ 构建失败：无法下载且仓库中无文件"; \
+                echo "✗ 请在 Version/${VERSION_NUM}/ 目录下添加 snell 文件或确保网络可访问"; \
                 exit 1; \
             fi; \
         fi; \
