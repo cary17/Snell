@@ -57,9 +57,11 @@ LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-doc
 LABEL org.opencontainers.image.description="Snell Server"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 只安装运行时必需的依赖
+# 安装运行时必需的依赖（包括 tini 用于信号处理）
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tini && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # 创建工作目录
@@ -74,7 +76,6 @@ RUN chmod +x /snell/entrypoint.sh /snell/snell-server
 
 WORKDIR /snell
 
-EXPOSE 20000
 
-# 使用 root 用户运行（egress-interface 需要 root 权限）
-ENTRYPOINT ["/snell/entrypoint.sh"]
+# 使用 tini 作为 init 进程来正确处理信号
+ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
