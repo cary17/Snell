@@ -1,89 +1,122 @@
-name: Build and Push Snell Docker Image
+name: Build & Push Snell
 
 on:
-  schedule:
-    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Snell版本号（如：5.0.1，留空使用最新版本）'
+      snell_version:
+        description: "Snell 版本号（如：5.0.1，留空自动获取官网最新正式版）"
         required: false
-        type: string
-      debian:
-        required: false
-        default: 'bookworm'
-        type: string
-      alpine:
-        required: false
-        default: 'latest'
-        type: string
-      force:
-        required: false
-        type: boolean
-        default: false
+        default: ""
+
+env:
+  IMAGE_NAME: snell
+  REGISTRY: ghcr.io
+  PLATFORMS: linux/amd64,linux/386,linux/arm64,linux/arm/v7
 
 jobs:
-  check-version:
+  version-check:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get_version.outputs.version }}
-      should_build: ${{ steps.check_build.outputs.should_build }}
+      snell_version: ${{ steps.version.outputs.snell_version }}
+      should_build: ${{ steps.version.outputs.should_build }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - id: get_version
+      - name: Install tools
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          sudo apt-get update
+          sudo apt-get install -y curl jq
+
+      - name: Detect Snell version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.snell_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          get_latest_snell_version() {
+            curl -fsSL \
+              https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
+            | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' \
+            | sort -V \
+            | tail -n1
+          }
+
+          get_ghcr_latest_version() {
+            gh api \
+              /users/${{ github.repository_owner }}/packages/container/${IMAGE_NAME}/versions \
+              --jq '.[].metadata.container.tags[]' 2>/dev/null \
+            | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V \
+            | tail -n1 || true
+          }
+
+          if [ -z "$INPUT_VERSION" ]; then
+            echo "ℹ SNELL_VERSION 为空，获取官网最新正式版"
+            SNELL_VERSION="$(get_latest_snell_version)"
           else
-            VERSION=$(curl -sL https://dl.nssurge.com/snell/ | \
-              grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
-              sort -Vru | head -n 1)
+            SNELL_VERSION="v${INPUT_VERSION#v}"
           fi
-          echo "version=v${VERSION#v}" >> $GITHUB_OUTPUT
 
-      - id: check_build
-        run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-          if [ "${{ inputs.force }}" = "true" ]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            exit 0
+          if [ -z "$SNELL_VERSION" ]; then
+            echo "❌ 无法获取 Snell 版本"
+            exit 1
           fi
-          if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:${VERSION} >/dev/null 2>&1; then
+
+          GHCR_VERSION="$(get_ghcr_latest_version)"
+
+          echo "官网版本: $SNELL_VERSION"
+          echo "GHCR 版本: ${GHCR_VERSION:-<none>}"
+
+          if [ "$SNELL_VERSION" = "$GHCR_VERSION" ]; then
+            echo "✓ Snell 未更新，取消构建"
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
+            echo "🚀 Snell 有新版本，开始构建"
             echo "should_build=true" >> $GITHUB_OUTPUT
           fi
 
+          echo "snell_version=$SNELL_VERSION" >> $GITHUB_OUTPUT
+
   build-and-push:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
+    needs: version-check
+    if: needs.version-check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+
     strategy:
+      fail-fast: true
       matrix:
         base: [debian, alpine]
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - uses: docker/login-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and Push (${{ matrix.base }})
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ${{ matrix.base == 'alpine' && 'Dockerfile.alpine' || 'Dockerfile' }}
-          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
+          file: Dockerfile.${{ matrix.base }}
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}${{ matrix.base == 'alpine' && '-alpine' || '' }}
+          platforms: ${{ env.PLATFORMS }}
           build-args: |
-            SNELL_VERSION=${{ needs.check-version.outputs.version }}
-            DEBIAN_VERSION=${{ inputs.debian }}
-            ALPINE_VERSION=${{ inputs.alpine }}
+            SNELL_VERSION=${{ needs.version-check.outputs.snell_version }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.version-check.outputs.snell_version }}-${{ matrix.base }}
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.base }}
