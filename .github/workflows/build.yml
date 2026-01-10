@@ -11,11 +11,11 @@ on:
         required: false
         type: string
       debian_version:
-        description: 'Debian版本号（如：12, 13，留空使用最新）'
+        description: 'Debian版本号（如：bookworm, trixie，留空使用 bookworm）'
         required: false
         type: string
       alpine_version:
-        description: 'Alpine版本号（如：3.19, 3.20，留空使用最新）'
+        description: 'Alpine版本号（如：3.19, 3.20, 3.21，留空使用 3.21）'
         required: false
         type: string
       force:
@@ -131,13 +131,13 @@ jobs:
             if [ -n "${{ inputs.debian_version }}" ]; then
               BASE_VERSION="${{ inputs.debian_version }}"
             else
-              BASE_VERSION="latest"
+              BASE_VERSION="bookworm"
             fi
           else
             if [ -n "${{ inputs.alpine_version }}" ]; then
               BASE_VERSION="${{ inputs.alpine_version }}"
             else
-              BASE_VERSION="latest"
+              BASE_VERSION="3.21"
             fi
           fi
           
