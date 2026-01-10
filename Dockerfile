@@ -1,4 +1,4 @@
-ARG BASE_VERSION=latest
+ARG BASE_VERSION=bookworm
 FROM debian:${BASE_VERSION}-slim AS builder
 
 ARG TARGETARCH
@@ -52,6 +52,7 @@ RUN set -ex && \
 FROM debian:${BASE_VERSION}-slim
 
 ARG SNELL_VERSION
+
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
 LABEL org.opencontainers.image.description="Snell Server"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
