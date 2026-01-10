@@ -1,33 +1,25 @@
-ARG DEBIAN_VERSION=bookworm
-FROM debian:${DEBIAN_VERSION}-slim AS builder
+ARG BASE_VERSION=latest
+FROM debian:${BASE_VERSION}-slim AS builder
 
 ARG TARGETARCH
 ARG SNELL_VERSION
-ARG USE_LOCAL=false
 
 # 安装必要工具
-RUN if [ "${USE_LOCAL}" != "true" ]; then \
-        apt-get update && \
-        apt-get install -y --no-install-recommends \
-        ca-certificates \
-        wget \
-        unzip && \
-        rm -rf /var/lib/apt/lists/*; \
-    else \
-        apt-get update && \
-        apt-get install -y --no-install-recommends unzip && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    unzip && \
+    rm -rf /var/lib/apt/lists/*
 
 # 创建工作目录
 RUN mkdir -p /tmp/snell
 
-# 复制 Version 目录（如果存在）
+# 复制 Version 目录
 COPY Version /tmp/Version
 
 # 下载或使用仓库中的 snell-server
 RUN set -ex && \
-    # 映射架构名称
     case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
         386) ARCH="i386" ;; \
@@ -35,34 +27,29 @@ RUN set -ex && \
         arm/v7|arm) ARCH="armv7l" ;; \
         *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
-    echo "→ Target Architecture: ${TARGETARCH}" && \
-    echo "→ Snell Architecture: ${ARCH}" && \
-    echo "→ Snell Version: ${SNELL_VERSION}" && \
-    # 下载或使用仓库文件
-    if [ "${USE_LOCAL}" = "true" ]; then \
-        FILE_PATH="/tmp/Version/${SNELL_VERSION}/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip"; \
-        echo "→ 检查仓库文件: ${FILE_PATH}"; \
-        if [ -f "${FILE_PATH}" ]; then \
-            echo "✓ 使用仓库文件"; \
-            cp "${FILE_PATH}" /tmp/snell.zip; \
-        else \
-            echo "⚠ 仓库文件不存在，回退到官方下载"; \
-            DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip"; \
-            echo "→ 下载地址: ${DOWNLOAD_URL}"; \
-            wget -O /tmp/snell.zip "${DOWNLOAD_URL}"; \
-        fi; \
+    echo "→ Snell Version: ${SNELL_VERSION}, Arch: ${ARCH}" && \
+    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip" && \
+    REPO_FILE="/tmp/Version/${SNELL_VERSION}/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip" && \
+    echo "→ 尝试官方下载: ${DOWNLOAD_URL}" && \
+    if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
+        echo "✓ 官方下载成功"; \
     else \
-        DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${SNELL_VERSION}-linux-${ARCH}.zip"; \
-        echo "→ 官方下载: ${DOWNLOAD_URL}"; \
-        wget -O /tmp/snell.zip "${DOWNLOAD_URL}"; \
+        echo "⚠️ 官方下载失败，尝试使用仓库文件"; \
+        if [ -f "${REPO_FILE}" ]; then \
+            echo "✓ 使用仓库文件: ${REPO_FILE}"; \
+            cp "${REPO_FILE}" /tmp/snell.zip; \
+        else \
+            echo "❌ 构建失败：官方下载失败且仓库中无备份文件"; \
+            echo "提示：请在 Version/${SNELL_VERSION}/ 目录下添加 snell 文件"; \
+            exit 1; \
+        fi; \
     fi && \
-    # 解压并设置权限
     unzip /tmp/snell.zip -d /tmp/snell && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
 # 最终运行镜像
-FROM debian:${DEBIAN_VERSION}-slim
+FROM debian:${BASE_VERSION}-slim
 
 ARG SNELL_VERSION
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
