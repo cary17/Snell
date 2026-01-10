@@ -1,5 +1,4 @@
 #!/bin/sh
-
 set -e
 
 # 去除变量值中的引号（如果有的话）
@@ -62,7 +61,7 @@ cat /snell/snell.conf
 # 信号处理函数
 cleanup() {
     echo "Received shutdown signal, stopping snell-server..."
-    if [ -n "$SNELL_PID" ]; then
+    if [ -n "$SNELL_PID" ] && kill -0 "$SNELL_PID" 2>/dev/null; then
         kill -TERM "$SNELL_PID" 2>/dev/null || true
         wait "$SNELL_PID" 2>/dev/null || true
     fi
@@ -73,12 +72,6 @@ cleanup() {
 # 捕获 SIGTERM 和 SIGINT 信号
 trap cleanup TERM INT
 
-# 启动 snell-server
+# 启动 snell-server（前台运行）
 echo "Starting snell-server..."
-/snell/snell-server -c /snell/snell.conf -l ${LOG:-notify} &
-SNELL_PID=$!
-
-echo "Snell-server started with PID $SNELL_PID"
-
-# 等待进程结束
-wait $SNELL_PID
+exec /snell/snell-server -c /snell/snell.conf -l ${LOG:-notify}
