@@ -1,0 +1,83 @@
+ARG ALPINE_VERSION=3.19
+FROM alpine:${ALPINE_VERSION} AS builder
+
+ARG TARGETARCH
+ARG SNELL_VERSION
+ARG USE_LOCAL=false
+
+# 安装必要工具
+RUN if [ "${USE_LOCAL}" != "true" ]; then \
+        apk add --no-cache ca-certificates wget unzip; \
+    else \
+        apk add --no-cache unzip; \
+    fi
+
+# 创建工作目录
+RUN mkdir -p /tmp/snell
+
+# 复制 Version 目录（如果存在）
+COPY Version /tmp/Version
+
+# 映射架构并下载或使用仓库中的 snell-server
+RUN case "${TARGETARCH}" in \
+        amd64) ARCH="amd64" ;; \
+        386) ARCH="i386" ;; \
+        arm64) ARCH="aarch64" ;; \
+        arm/v7|arm) ARCH="armv7l" ;; \
+        *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+    esac && \
+    VERSION_NUM="${SNELL_VERSION#v}" && \
+    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
+    FILE_PATH="/tmp/Version/${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
+    # 优先使用仓库文件（如果勾选了 USE_LOCAL）
+    if [ "${USE_LOCAL}" = "true" ] && [ -f "${FILE_PATH}" ]; then \
+        echo "→ 使用仓库文件: ${FILE_PATH}"; \
+        cp "${FILE_PATH}" /tmp/snell.zip; \
+    else \
+        # 尝试下载
+        echo "→ 官方下载: ${DOWNLOAD_URL}"; \
+        if ! wget -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
+            echo "⚠ 下载失败，尝试使用仓库文件"; \
+            if [ -f "${FILE_PATH}" ]; then \
+                echo "✓ 找到仓库文件，使用: ${FILE_PATH}"; \
+                cp "${FILE_PATH}" /tmp/snell.zip; \
+            else \
+                echo "✗ 仓库文件不存在: ${FILE_PATH}"; \
+                echo "✗ 构建失败：无法下载且仓库中无文件"; \
+                exit 1; \
+            fi; \
+        else \
+            echo "✓ 下载成功"; \
+        fi; \
+    fi && \
+    unzip /tmp/snell.zip -d /tmp/snell && \
+    chmod +x /tmp/snell/snell-server && \
+    echo "✓ Snell Server 准备完成"
+
+# 最终运行镜像
+FROM alpine:${ALPINE_VERSION}
+
+ARG SNELL_VERSION
+LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
+LABEL org.opencontainers.image.description="Snell Server (Alpine)"
+LABEL org.opencontainers.image.version="${SNELL_VERSION}"
+
+# 安装运行时依赖（Alpine 需要 libstdc++）
+RUN apk add --no-cache ca-certificates libstdc++ bash openssl
+
+# 创建工作目录
+RUN mkdir -p /snell
+
+# 从构建阶段复制文件
+COPY --from=builder /tmp/snell/snell-server /snell/snell-server
+COPY entrypoint.sh /snell/entrypoint.sh
+
+# 设置执行权限
+RUN chmod +x /snell/entrypoint.sh /snell/snell-server
+
+WORKDIR /snell
+
+EXPOSE 20000
+
+# 使用 root 用户运行（egress-interface 需要 root 权限）
+ENTRYPOINT ["/snell/entrypoint.sh"]
