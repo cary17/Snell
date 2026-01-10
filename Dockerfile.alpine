@@ -1,4 +1,4 @@
-ARG BASE_VERSION=latest
+ARG BASE_VERSION=3.21
 FROM alpine:${BASE_VERSION} AS builder
 
 ARG TARGETARCH
@@ -47,12 +47,17 @@ RUN set -ex && \
 FROM alpine:${BASE_VERSION}
 
 ARG SNELL_VERSION
+
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装运行时依赖
-RUN apk add --no-cache ca-certificates libstdc++ bash openssl
+# 安装运行时依赖（包括 openssl 用于生成随机密码）
+RUN apk add --no-cache \
+    ca-certificates \
+    libstdc++ \
+    libgcc \
+    openssl
 
 # 创建工作目录
 RUN mkdir -p /snell
