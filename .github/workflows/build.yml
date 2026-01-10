@@ -16,9 +16,9 @@ on:
         default: 'bookworm'
         type: string
       alpine:
-        description: 'Alpine版本（如：3.19, 3.18, edge）'
+        description: 'Alpine版本（如：latest, edge, 3.19, 3.18）'
         required: false
-        default: '3.19'
+        default: 'latest'
         type: string
       use_repo_files:
         description: '使用仓库中的 Version 目录文件（如果存在）'
@@ -153,7 +153,7 @@ jobs:
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
           DEBIAN="${{ inputs.debian || 'bookworm' }}"
-          ALPINE="${{ inputs.alpine || '3.19' }}"
+          ALPINE="${{ inputs.alpine || 'latest' }}"
           USE_REPO="${{ inputs.use_repo_files }}"
           BASE="${{ matrix.base }}"
           
