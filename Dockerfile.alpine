@@ -1,13 +1,12 @@
-ARG ALPINE_VERSION=latest
-FROM alpine:${ALPINE_VERSION} AS builder
+ARG ALPINE_VERSION
+FROM alpine:${ALPINE_VERSION:-latest}
 
 ARG TARGETARCH
 ARG SNELL_VERSION
 
 RUN apk add --no-cache ca-certificates wget unzip
 
-WORKDIR /tmp
-COPY Version /tmp/Version
+WORKDIR /opt/snell
 
 RUN set -ex && \
     case "$TARGETARCH" in \
@@ -15,29 +14,29 @@ RUN set -ex && \
       386) ARCH=i386 ;; \
       arm64) ARCH=aarch64 ;; \
       arm/v7) ARCH=armv7l ;; \
-      *) exit 1 ;; \
+      *) echo "Unsupported arch: $TARGETARCH" && exit 1 ;; \
     esac && \
     V="${SNELL_VERSION#v}" && \
     URL="https://dl.nssurge.com/snell/snell-server-v${V}-linux-${ARCH}.zip" && \
     FILE="/tmp/Version/v${V}/snell-server-v${V}-linux-${ARCH}.zip" && \
+    rm -f snell.zip && \
     i=1 && \
     while [ $i -le 5 ]; do \
-      wget -O snell.zip "$URL" && break || true; \
+      if wget -O snell.zip "$URL"; then break; fi; \
       rm -f snell.zip; \
       sleep 3; \
       i=$((i+1)); \
     done && \
-    [ -s snell.zip ] || cp "$FILE" snell.zip && \
-    unzip snell.zip && chmod +x snell-server
+    if [ ! -s snell.zip ]; then \
+      if [ -f "$FILE" ]; then \
+        cp "$FILE" snell.zip; \
+      else \
+        echo "Snell 下载失败"; \
+        exit 1; \
+      fi; \
+    fi && \
+    unzip snell.zip && \
+    chmod +x snell-server
 
-FROM alpine:${ALPINE_VERSION}
-
-RUN apk add --no-cache ca-certificates libstdc++
-
-WORKDIR /snell
-COPY --from=builder /tmp/snell-server /snell/snell-server
-COPY entrypoint.sh /snell/entrypoint.sh
-RUN chmod +x /snell/*
-
-EXPOSE 20000
-ENTRYPOINT ["/snell/entrypoint.sh"]
+EXPOSE 8388
+ENTRYPOINT ["./snell-server"]
