@@ -22,7 +22,7 @@ RUN set -ex && \
         *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
     VERSION_NUM="${SNELL_VERSION#v}" && \
-    FILE_PATH="/tmp/Version/${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
+    FILE_PATH="/tmp/Version/v${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
     DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
     echo "→ 下载 Snell: ${DOWNLOAD_URL}" && \
     rm -f /tmp/snell.zip && \
