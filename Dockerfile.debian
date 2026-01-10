@@ -1,51 +1,48 @@
-ARG DEBIAN_VERSION=bookworm
-FROM debian:${DEBIAN_VERSION}-slim AS builder
+ARG DEBIAN_VERSION=12-slim
+FROM debian:${DEBIAN_VERSION} AS builder
 
 ARG TARGETARCH
 ARG SNELL_VERSION
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    ca-certificates wget unzip && \
+    apt-get install -y --no-install-recommends ca-certificates wget unzip && \
     rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /tmp/snell
+WORKDIR /tmp
 
 COPY Version /tmp/Version
 
 RUN set -ex && \
-    case "${TARGETARCH}" in \
-        amd64) ARCH="amd64" ;; \
-        386) ARCH="i386" ;; \
-        arm64) ARCH="aarch64" ;; \
-        arm/v7|arm) ARCH="armv7l" ;; \
-        *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+    case "$TARGETARCH" in \
+      amd64) ARCH=amd64 ;; \
+      386) ARCH=i386 ;; \
+      arm64) ARCH=aarch64 ;; \
+      arm/v7) ARCH=armv7l ;; \
+      *) exit 1 ;; \
     esac && \
-    VERSION_NUM="${SNELL_VERSION#v}" && \
-    FILE_PATH="/tmp/Version/v${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
-    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
-    echo "→ 下载 Snell: ${DOWNLOAD_URL}" && \
-    rm -f /tmp/snell.zip && \
+    V="${SNELL_VERSION#v}" && \
+    URL="https://dl.nssurge.com/snell/snell-server-v${V}-linux-${ARCH}.zip" && \
+    FILE="/tmp/Version/v${V}/snell-server-v${V}-linux-${ARCH}.zip" && \
     i=1 && \
     while [ $i -le 5 ]; do \
-        if wget -O /tmp/snell.zip "${DOWNLOAD_URL}"; then \
-            echo "✓ 下载成功"; \
-            break; \
-        fi; \
-        rm -f /tmp/snell.zip; \
-        echo "⚠ 下载失败，第 $i 次重试，3 秒后重试"; \
-        i=$((i+1)); \
-        sleep 3; \
+      wget -O snell.zip "$URL" && break || true; \
+      rm -f snell.zip; \
+      sleep 3; \
+      i=$((i+1)); \
     done && \
-    if [ ! -s /tmp/snell.zip ]; then \
-        echo "✗ 官方下载失败，尝试使用仓库文件"; \
-        if [ -f "${FILE_PATH}" ]; then \
-            cp "${FILE_PATH}" /tmp/snell.zip; \
-            echo "✓ 使用仓库文件"; \
-        else \
-            echo "✗ 仓库中也不存在文件，构建失败"; \
-            exit 1; \
-        fi; \
-    fi && \
-    unzip /tmp/snell.zip -d /tmp/snell && \
-    chmod +x /tmp/snell/snell-server
+    [ -s snell.zip ] || cp "$FILE" snell.zip && \
+    unzip snell.zip && chmod +x snell-server
+
+FROM debian:${DEBIAN_VERSION}
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /snell
+COPY --from=builder /tmp/snell-server /snell/snell-server
+COPY entrypoint.sh /snell/entrypoint.sh
+RUN chmod +x /snell/*
+
+EXPOSE 20000
+ENTRYPOINT ["/snell/entrypoint.sh"]
