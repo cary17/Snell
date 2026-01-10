@@ -7,24 +7,17 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell版本号（如：5.0.1，留空使用最新版本）'
+        description: 'Snell版本号（如：5.0.1 或 v5.0.1，留空使用最新版本）'
         required: false
         type: string
-      debian:
-        description: 'Debian版本（如：bookworm, bullseye, trixie）'
+      debian_version:
+        description: 'Debian版本号（如：12, 13，留空使用最新）'
         required: false
-        default: 'bookworm'
         type: string
-      alpine:
-        description: 'Alpine版本（如：latest, edge, 3.19, 3.18）'
+      alpine_version:
+        description: 'Alpine版本号（如：3.19, 3.20，留空使用最新）'
         required: false
-        default: 'latest'
         type: string
-      use_repo_files:
-        description: '使用仓库中的 Version 目录文件（如果存在）'
-        required: false
-        type: boolean
-        default: false
       force:
         description: '强制构建（即使版本已存在）'
         required: false
@@ -49,50 +42,27 @@ jobs:
         id: get_version
         run: |
           if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+            INPUT_VERSION="${{ inputs.version }}"
+            # 确保版本号有 v 前缀
+            VERSION="v${INPUT_VERSION#v}"
             echo "✓ 使用指定版本: $VERSION"
           else
             echo "→ 检测最新版本..."
-            # 从 Release Notes 页面提取版本号
-            VERSION=$(curl -sL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | \
+            # 从官方 Release Notes 页面提取最新版本
+            LATEST_VERSION=$(curl -sL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | \
               grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
               sort -Vru | head -n 1)
             
-            if [ -z "$VERSION" ]; then
-              VERSION=$(curl -sL https://dl.nssurge.com/snell/ 2>/dev/null | \
-                grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
-                sort -Vru | head -n 1)
-            fi
-            
-            if [ -z "$VERSION" ]; then
-              echo "✗ 无法获取版本号"
+            if [ -z "$LATEST_VERSION" ]; then
+              echo "✗ 无法从官网获取版本号"
               exit 1
             fi
+            
+            VERSION="v${LATEST_VERSION}"
             echo "✓ 检测到最新版本: $VERSION"
           fi
           
-          # 添加 v 前缀
-          echo "version=v${VERSION#v}" >> $GITHUB_OUTPUT
-
-      - name: 检查仓库中是否有该版本的文件
-        id: check_repo_files
-        run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-          USE_REPO="${{ inputs.use_repo_files }}"
-          
-          if [ "$USE_REPO" = "true" ] || [ -z "$USE_REPO" ]; then
-            # 检查是否有至少一个平台的文件
-            if ls Version/${VERSION}/snell-server-v${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
-              echo "✓ 仓库中存在版本 ${VERSION} 的文件"
-              echo "has_files=true" >> $GITHUB_OUTPUT
-            else
-              echo "→ 仓库中不存在版本 ${VERSION} 的文件"
-              echo "has_files=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "→ 不使用仓库文件"
-            echo "has_files=false" >> $GITHUB_OUTPUT
-          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: 检查是否需要构建
         id: check_build
@@ -154,31 +124,26 @@ jobs:
         id: prep
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          DEBIAN="${{ inputs.debian || 'bookworm' }}"
-          ALPINE="${{ inputs.alpine || 'latest' }}"
-          USE_REPO="${{ inputs.use_repo_files }}"
           BASE="${{ matrix.base }}"
           
-          # 检查是否使用仓库文件
-          if [ "$USE_REPO" = "true" ]; then
-            VERSION_NUM="${VERSION#v}"
-            if ls Version/${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-*.zip 1> /dev/null 2>&1; then
-              USE_LOCAL="true"
-              echo "✓ 将使用仓库中的文件"
+          # 确定基础镜像版本
+          if [ "$BASE" = "debian" ]; then
+            if [ -n "${{ inputs.debian_version }}" ]; then
+              BASE_VERSION="${{ inputs.debian_version }}"
             else
-              USE_LOCAL="false"
-              echo "→ 仓库中无文件，将从官方下载"
+              BASE_VERSION="latest"
             fi
           else
-            USE_LOCAL="false"
-            echo "→ 将从官方下载"
+            if [ -n "${{ inputs.alpine_version }}" ]; then
+              BASE_VERSION="${{ inputs.alpine_version }}"
+            else
+              BASE_VERSION="latest"
+            fi
           fi
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "debian=$DEBIAN" >> $GITHUB_OUTPUT
-          echo "alpine=$ALPINE" >> $GITHUB_OUTPUT
-          echo "use_local=$USE_LOCAL" >> $GITHUB_OUTPUT
           echo "base=$BASE" >> $GITHUB_OUTPUT
+          echo "base_version=$BASE_VERSION" >> $GITHUB_OUTPUT
           
           # 构建镜像标签
           GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
@@ -205,14 +170,11 @@ jobs:
           
           echo ""
           echo "📦 构建信息:"
-          echo "  基础镜像: $BASE"
-          echo "  版本: $VERSION"
-          echo "  Debian: $DEBIAN"
-          echo "  Alpine: $ALPINE"
-          echo "  使用仓库文件: $USE_LOCAL"
+          echo "  基础镜像: $BASE:$BASE_VERSION"
+          echo "  Snell 版本: $VERSION"
           echo "  标签: $TAGS"
 
-      - name: 创建空 Version 目录（如果不存在）
+      - name: 创建空 Version 目录
         run: |
           mkdir -p Version
           touch Version/.gitkeep
@@ -227,9 +189,7 @@ jobs:
           tags: ${{ steps.prep.outputs.tags }}
           build-args: |
             SNELL_VERSION=${{ steps.prep.outputs.version }}
-            DEBIAN_VERSION=${{ steps.prep.outputs.debian }}
-            ALPINE_VERSION=${{ steps.prep.outputs.alpine }}
-            USE_LOCAL=${{ steps.prep.outputs.use_local }}
+            BASE_VERSION=${{ steps.prep.outputs.base_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -237,9 +197,8 @@ jobs:
         run: |
           echo "### ✅ 构建完成 (${{ matrix.base }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**版本:** ${{ steps.prep.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**基础镜像:** ${{ matrix.base }}" >> $GITHUB_STEP_SUMMARY
-          echo "**构建方式:** ${{ steps.prep.outputs.use_local == 'true' && '使用仓库文件' || '官方下载' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Snell 版本:** ${{ steps.prep.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**基础镜像:** ${{ matrix.base }}:${{ steps.prep.outputs.base_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**镜像标签:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
