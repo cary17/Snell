@@ -119,9 +119,11 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       matrix:
         base: [debian, alpine]
+      fail-fast: false
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
