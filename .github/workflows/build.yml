@@ -2,18 +2,23 @@ name: Build and Push Snell Docker Image
 
 on:
   schedule:
-    # 每小时检查一次新版本
+    # 每小时执行一次（UTC 时间，对应北京时间每小时整点）
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell版本号（如：v5.0.1、v5.0.0b2，留空使用最新版本）'
+        description: 'Snell版本号（如：5.0.1，留空使用最新版本）'
         required: false
         type: string
       debian:
         description: 'Debian版本（如：bookworm, bullseye, trixie）'
         required: false
         default: 'bookworm'
+        type: string
+      alpine:
+        description: 'Alpine版本（如：3.19, 3.18, edge）'
+        required: false
+        default: '3.19'
         type: string
       use_repo_files:
         description: '使用仓库中的 Version 目录文件（如果存在）'
@@ -43,45 +48,41 @@ jobs:
       - name: 获取 Snell 版本
         id: get_version
         run: |
-          normalize() {
-            v="$1"
-            [[ "$v" != v* ]] && v="v$v"
-            echo "$v"
-          }
-
           if [ -n "${{ inputs.version }}" ]; then
-            VERSION="$(normalize "${{ inputs.version }}")"
+            VERSION="${{ inputs.version }}"
             echo "✓ 使用指定版本: $VERSION"
           else
             echo "→ 检测最新版本..."
+            # 从 Release Notes 页面提取版本号
             VERSION=$(curl -sL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | \
-              grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+([a-z]+[0-9]+)?' | \
-              sed 's/^/v/' | sort -Vru | head -n 1)
-
+              grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
+              sort -Vru | head -n 1)
+            
             if [ -z "$VERSION" ]; then
               VERSION=$(curl -sL https://dl.nssurge.com/snell/ 2>/dev/null | \
-                grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+([a-z]+[0-9]+)?' | \
-                sed 's/^/v/' | sort -Vru | head -n 1)
+                grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
+                sort -Vru | head -n 1)
             fi
-
+            
             if [ -z "$VERSION" ]; then
               echo "✗ 无法获取版本号"
               exit 1
             fi
-
             echo "✓ 检测到最新版本: $VERSION"
           fi
-
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # 添加 v 前缀
+          echo "version=v${VERSION#v}" >> $GITHUB_OUTPUT
 
       - name: 检查仓库中是否有该版本的文件
         id: check_repo_files
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
           USE_REPO="${{ inputs.use_repo_files }}"
-
+          
           if [ "$USE_REPO" = "true" ] || [ -z "$USE_REPO" ]; then
-            if ls Version/${VERSION}/snell-server-${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
+            # 检查是否有至少一个平台的文件
+            if ls Version/${VERSION}/snell-server-v${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
               echo "✓ 仓库中存在版本 ${VERSION} 的文件"
               echo "has_files=true" >> $GITHUB_OUTPUT
             else
@@ -98,18 +99,19 @@ jobs:
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
           FORCE="${{ inputs.force }}"
-
+          
           if [ "$FORCE" = "true" ]; then
             echo "✓ 强制构建模式"
             echo "should_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:$VERSION >/dev/null 2>&1; then
-            echo "→ 版本 $VERSION 已存在于 GHCR"
+          
+          # 检查 GHCR 是否已存在该版本
+          if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:${VERSION} >/dev/null 2>&1; then
+            echo "→ 版本 ${VERSION} 已存在于 GHCR"
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
-            echo "✓ 版本 $VERSION 需要构建"
+            echo "✓ 版本 ${VERSION} 需要构建"
             echo "should_build=true" >> $GITHUB_OUTPUT
           fi
 
@@ -117,6 +119,9 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        base: [debian, alpine]
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
@@ -148,10 +153,14 @@ jobs:
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
           DEBIAN="${{ inputs.debian || 'bookworm' }}"
+          ALPINE="${{ inputs.alpine || '3.19' }}"
           USE_REPO="${{ inputs.use_repo_files }}"
-
+          BASE="${{ matrix.base }}"
+          
+          # 检查是否使用仓库文件
           if [ "$USE_REPO" = "true" ]; then
-            if ls Version/${VERSION}/snell-server-${VERSION}-linux-*.zip 1> /dev/null 2>&1; then
+            VERSION_NUM="${VERSION#v}"
+            if ls Version/${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-*.zip 1> /dev/null 2>&1; then
               USE_LOCAL="true"
               echo "✓ 将使用仓库中的文件"
             else
@@ -162,24 +171,42 @@ jobs:
             USE_LOCAL="false"
             echo "→ 将从官方下载"
           fi
-
+          
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "debian=$DEBIAN" >> $GITHUB_OUTPUT
+          echo "alpine=$ALPINE" >> $GITHUB_OUTPUT
           echo "use_local=$USE_LOCAL" >> $GITHUB_OUTPUT
-
+          echo "base=$BASE" >> $GITHUB_OUTPUT
+          
+          # 构建镜像标签
           GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
-          TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
-
+          
+          if [ "$BASE" = "debian" ]; then
+            # Debian: version 和 latest
+            TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
+          else
+            # Alpine: version-alpine 和 alpine
+            TAGS="${GHCR_IMAGE}:${VERSION}-alpine,${GHCR_IMAGE}:alpine"
+          fi
+          
+          # 如果配置了 Docker Hub
           if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
             DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
-            TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
+            if [ "$BASE" = "debian" ]; then
+              TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
+            else
+              TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION}-alpine,${DOCKER_HUB_IMAGE}:alpine"
+            fi
           fi
-
+          
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
-
+          
+          echo ""
           echo "📦 构建信息:"
+          echo "  基础镜像: $BASE"
           echo "  版本: $VERSION"
           echo "  Debian: $DEBIAN"
+          echo "  Alpine: $ALPINE"
           echo "  使用仓库文件: $USE_LOCAL"
           echo "  标签: $TAGS"
 
@@ -188,64 +215,30 @@ jobs:
           mkdir -p Version
           touch Version/.gitkeep
 
-      - name: 列出 Version 目录内容
-        run: |
-          echo "→ Version 目录内容:"
-          ls -lhR Version/ || echo "  (目录为空)"
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ${{ matrix.base == 'alpine' && 'Dockerfile.alpine' || 'Dockerfile' }}
           platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.prep.outputs.tags }}
           build-args: |
             SNELL_VERSION=${{ steps.prep.outputs.version }}
             DEBIAN_VERSION=${{ steps.prep.outputs.debian }}
+            ALPINE_VERSION=${{ steps.prep.outputs.alpine }}
             USE_LOCAL=${{ steps.prep.outputs.use_local }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: 创建 Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.prep.outputs.version }}
-          name: Snell ${{ steps.prep.outputs.version }}
-          body: |
-            ## 🚀 Snell Server ${{ steps.prep.outputs.version }}
-
-            **基础镜像:** Debian ${{ steps.prep.outputs.debian }}
-            **构建方式:** ${{ steps.prep.outputs.use_local == 'true' && '使用仓库文件' || '官方下载' }}
-
-            ### 📦 镜像地址
-
-            **GitHub Container Registry:**
-            ```bash
-            docker pull ghcr.io/${{ github.repository_owner }}/snell:${{ steps.prep.outputs.version }}
-            docker pull ghcr.io/${{ github.repository_owner }}/snell:latest
-            ```
-
-            **Docker Hub:** ${{ secrets.DOCKER_HUB_USERNAME != '' && format('
-            ```bash
-            docker pull {0}/snell:{1}
-            docker pull {0}/snell:latest
-            ```', secrets.DOCKER_HUB_USERNAME, steps.prep.outputs.version) || '（未配置）' }}
-
-            ### 🏗️ 支持平台
-            - `linux/amd64`
-            - `linux/386`
-            - `linux/arm64`
-            - `linux/arm/v7`
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: 构建摘要
         run: |
-          echo "### ✅ 构建完成" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 构建完成 (${{ matrix.base }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**版本:** ${{ steps.prep.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Debian:** ${{ steps.prep.outputs.debian }}" >> $GITHUB_STEP_SUMMARY
+          echo "**基础镜像:** ${{ matrix.base }}" >> $GITHUB_STEP_SUMMARY
           echo "**构建方式:** ${{ steps.prep.outputs.use_local == 'true' && '使用仓库文件' || '官方下载' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**镜像标签:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.prep.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
