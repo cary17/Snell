@@ -43,20 +43,22 @@ RUN set -ex && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
-# 最终运行镜像
+# 最终运行镜像 - 使用 glibc 兼容层
 FROM alpine:${BASE_VERSION}
 
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
-LABEL org.opencontainers.image.description="Snell Server (Alpine)"
+LABEL org.opencontainers.image.description="Snell Server (Alpine with glibc)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装运行时依赖（包括 openssl 用于生成随机密码）
+# 安装 glibc 兼容层和其他运行时依赖
+# Snell 是用 glibc 编译的，在 Alpine (musl) 上需要 gcompat
 RUN apk add --no-cache \
     ca-certificates \
     libstdc++ \
     libgcc \
+    gcompat \
     openssl
 
 # 创建工作目录
