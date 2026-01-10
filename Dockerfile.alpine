@@ -19,7 +19,8 @@ RUN mkdir -p /tmp/snell
 COPY Version /tmp/Version
 
 # 映射架构并下载或使用仓库中的 snell-server
-RUN case "${TARGETARCH}" in \
+RUN set -ex && \
+    case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
         386) ARCH="i386" ;; \
         arm64) ARCH="aarch64" ;; \
@@ -27,27 +28,25 @@ RUN case "${TARGETARCH}" in \
         *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
     VERSION_NUM="${SNELL_VERSION#v}" && \
+    echo "→ Version: ${VERSION_NUM}, Arch: ${ARCH}" && \
     DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
     FILE_PATH="/tmp/Version/${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
-    # 优先使用仓库文件（如果勾选了 USE_LOCAL）
     if [ "${USE_LOCAL}" = "true" ] && [ -f "${FILE_PATH}" ]; then \
         echo "→ 使用仓库文件: ${FILE_PATH}"; \
         cp "${FILE_PATH}" /tmp/snell.zip; \
     else \
-        # 尝试下载
         echo "→ 官方下载: ${DOWNLOAD_URL}"; \
-        if ! wget -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
+        if wget -O /tmp/snell.zip "${DOWNLOAD_URL}"; then \
+            echo "✓ 下载成功"; \
+        else \
             echo "⚠ 下载失败，尝试使用仓库文件"; \
             if [ -f "${FILE_PATH}" ]; then \
-                echo "✓ 找到仓库文件，使用: ${FILE_PATH}"; \
+                echo "✓ 使用仓库文件: ${FILE_PATH}"; \
                 cp "${FILE_PATH}" /tmp/snell.zip; \
             else \
-                echo "✗ 仓库文件不存在: ${FILE_PATH}"; \
                 echo "✗ 构建失败：无法下载且仓库中无文件"; \
                 exit 1; \
             fi; \
-        else \
-            echo "✓ 下载成功"; \
         fi; \
     fi && \
     unzip /tmp/snell.zip -d /tmp/snell && \
