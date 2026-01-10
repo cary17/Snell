@@ -1,67 +1,62 @@
-name: Build & Push Snell
+name: Build and Push Snell
 
 on:
   workflow_dispatch:
     inputs:
       snell_version:
-        description: "Snell 版本号（如：5.0.1，留空自动获取官网最新正式版）"
+        description: "Snell 版本号（如 5.0.1，留空自动获取官网最新正式版）"
+        required: false
+        default: ""
+      debian_version:
+        description: "Debian 主版本号（11 / 12 / 13，默认 12）"
+        required: false
+        default: ""
+      alpine_version:
+        description: "Alpine 版本（默认 latest）"
         required: false
         default: ""
 
 env:
   IMAGE_NAME: snell
-  GHCR_REGISTRY: ghcr.io
   PLATFORMS: linux/amd64,linux/386,linux/arm64,linux/arm/v7
 
 jobs:
   version-check:
     runs-on: ubuntu-latest
     outputs:
-      snell_version: ${{ steps.version.outputs.snell_version }}
-      should_build: ${{ steps.version.outputs.should_build }}
+      snell_version: ${{ steps.ver.outputs.snell_version }}
+      should_build: ${{ steps.ver.outputs.should_build }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl gh
-
       - name: Detect Snell version
-        id: version
+        id: ver
         env:
           INPUT_VERSION: ${{ github.event.inputs.snell_version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
 
-          get_latest_snell_version() {
+          get_latest_official() {
             curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
-            | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' \
-            | sort -V \
-            | tail -n1
-          }
-
-          get_ghcr_latest_version() {
-            gh api /users/${{ github.repository_owner }}/packages/container/${IMAGE_NAME}/versions \
-              --jq '.[].metadata.container.tags[]' 2>/dev/null \
-            | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sort -V \
-            | tail -n1 || true
+              | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' \
+              | sort -V \
+              | tail -n1
           }
 
           if [ -z "$INPUT_VERSION" ]; then
-            SNELL_VERSION="$(get_latest_snell_version)"
+            SNELL_VERSION="$(get_latest_official)"
           else
             SNELL_VERSION="v${INPUT_VERSION#v}"
           fi
 
-          [ -z "$SNELL_VERSION" ] && exit 1
+          if [ -z "$SNELL_VERSION" ]; then
+            echo "✗ 无法获取 Snell 版本"
+            exit 1
+          fi
 
-          GHCR_VERSION="$(get_ghcr_latest_version)"
-
-          if [ "$SNELL_VERSION" = "$GHCR_VERSION" ]; then
+          if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:${SNELL_VERSION} >/dev/null 2>&1; then
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
             echo "should_build=true" >> $GITHUB_OUTPUT
@@ -75,7 +70,6 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: true
       matrix:
         base: [debian, alpine]
 
@@ -85,65 +79,58 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      # ---------- 登录 GHCR（必须） ----------
-      - name: Login to GHCR
+      - name: Login GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---------- 判断 Docker Hub 是否可用 ----------
-      - name: Detect Docker Hub
-        id: hub
-        run: |
-          if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
-            echo "enabled=true" >> $GITHUB_OUTPUT
-          else
-            echo "enabled=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Login to Docker Hub
-        if: steps.hub.outputs.enabled == 'true'
+      - name: Login Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      # ---------- 生成 tags ----------
+      - name: Resolve base versions
+        id: basever
+        run: |
+          DEBIAN="${{ github.event.inputs.debian_version }}"
+          ALPINE="${{ github.event.inputs.alpine_version }}"
+
+          [ -z "$DEBIAN" ] && DEBIAN="12"
+          [ -z "$ALPINE" ] && ALPINE="latest"
+
+          echo "debian=${DEBIAN}-slim" >> $GITHUB_OUTPUT
+          echo "alpine=$ALPINE" >> $GITHUB_OUTPUT
+
       - name: Prepare tags
         id: tags
         run: |
-          VERSION="${{ needs.version-check.outputs.snell_version }}"
+          V="${{ needs.version-check.outputs.snell_version }}"
           BASE="${{ matrix.base }}"
-
-          TAGS=""
+          OWNER="${{ github.repository_owner }}"
+          HUB="${{ secrets.DOCKER_HUB_USERNAME }}"
 
           if [ "$BASE" = "debian" ]; then
-            TAGS="ghcr.io/${{ github.repository_owner }}/snell:${VERSION},ghcr.io/${{ github.repository_owner }}/snell:latest"
+            TAGS="ghcr.io/$OWNER/snell:$V,ghcr.io/$OWNER/snell:latest"
+            TAGS="$TAGS,$HUB/snell:$V,$HUB/snell:latest"
           else
-            TAGS="ghcr.io/${{ github.repository_owner }}/snell:${VERSION}-alpine,ghcr.io/${{ github.repository_owner }}/snell:alpine"
-          fi
-
-          if [ "${{ steps.hub.outputs.enabled }}" = "true" ]; then
-            HUB="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
-            if [ "$BASE" = "debian" ]; then
-              TAGS="$TAGS,$HUB:${VERSION},$HUB:latest"
-            else
-              TAGS="$TAGS,$HUB:${VERSION}-alpine,$HUB:alpine"
-            fi
+            TAGS="ghcr.io/$OWNER/snell:$V-alpine,ghcr.io/$OWNER/snell:alpine"
+            TAGS="$TAGS,$HUB/snell:$V-alpine,$HUB/snell:alpine"
           fi
 
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
 
-      # ---------- 构建并推送 ----------
       - name: Build and Push (${{ matrix.base }})
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile.${{ matrix.base }}
-          push: true
           platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             SNELL_VERSION=${{ needs.version-check.outputs.snell_version }}
-          tags: ${{ steps.tags.outputs.tags }}
+            DEBIAN_VERSION=${{ steps.basever.outputs.debian }}
+            ALPINE_VERSION=${{ steps.basever.outputs.alpine }}
