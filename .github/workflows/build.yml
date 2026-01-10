@@ -6,16 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell 版本号（如 5.0.1，留空自动检测最新正式版）'
+        description: 'Snell 版本号（如 5.0.1，留空自动检测）'
         required: false
         type: string
       debian:
-        description: 'Debian 版本号（11 / 12 / 13，默认 12）'
+        description: 'Debian 版本号（11 / 12 / 13）'
         required: false
         default: '12'
         type: string
       alpine:
-        description: 'Alpine 版本（如 3.19 / latest，默认 latest）'
+        description: 'Alpine 版本（如 3.19 / latest）'
         required: false
         default: 'latest'
         type: string
@@ -30,8 +30,16 @@ jobs:
     outputs:
       snell_version: ${{ steps.detect.outputs.snell_version }}
       should_build: ${{ steps.detect.outputs.should_build }}
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Login GHCR (for manifest inspect)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Detect Snell Version
         id: detect
@@ -53,8 +61,9 @@ jobs:
 
           check_download() {
             local v="${1#v}"
-            local url="https://dl.nssurge.com/snell/snell-server-v${v}-linux-amd64.zip"
-            curl -sI --max-time 10 "$url" | head -n1 | grep -q "200"
+            curl -sI --max-time 10 \
+              "https://dl.nssurge.com/snell/snell-server-v${v}-linux-amd64.zip" \
+              | head -n1 | grep -q "200"
           }
 
           get_latest() {
@@ -71,14 +80,13 @@ jobs:
             SNELL_VERSION="v${INPUT_VERSION#v}"
           fi
 
-          if [ -z "$SNELL_VERSION" ]; then
-            echo "✗ 无法获取可用的 Snell 正式版"
-            exit 1
-          fi
+          [ -n "$SNELL_VERSION" ]
 
           echo "→ Snell version: $SNELL_VERSION"
 
-          if docker manifest inspect ghcr.io/${GITHUB_REPOSITORY_OWNER}/snell:${SNELL_VERSION} >/dev/null 2>&1; then
+          if docker manifest inspect \
+            ghcr.io/${{ github.repository_owner }}/snell:${SNELL_VERSION} \
+            >/dev/null 2>&1; then
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
             echo "should_build=true" >> $GITHUB_OUTPUT
@@ -90,6 +98,7 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         base: [debian, alpine]
@@ -125,8 +134,8 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.snell_version }}${{ matrix.base == 'alpine' && '-alpine' || '' }}
             ghcr.io/${{ github.repository_owner }}/snell:${{ matrix.base == 'alpine' && 'alpine' || 'latest' }}
-            ${{ secrets.DOCKER_HUB_USERNAME }}/snell:${{ needs.check-version.outputs.snell_version }}${{ matrix.base == 'alpine' && '-alpine' || '' }}
-            ${{ secrets.DOCKER_HUB_USERNAME }}/snell:${{ matrix.base == 'alpine' && 'alpine' || 'latest' }}
+            ${{ secrets.DOCKER_HUB_USERNAME && format('{0}/snell:{1}{2}', secrets.DOCKER_HUB_USERNAME, needs.check-version.outputs.snell_version, matrix.base == 'alpine' && '-alpine' || '') || '' }}
+            ${{ secrets.DOCKER_HUB_USERNAME && format('{0}/snell:{1}', secrets.DOCKER_HUB_USERNAME, matrix.base == 'alpine' && 'alpine' || 'latest') || '' }}
           build-args: |
             SNELL_VERSION=${{ needs.check-version.outputs.snell_version }}
             DEBIAN_VERSION=${{ inputs.debian }}
