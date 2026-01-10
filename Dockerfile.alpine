@@ -1,24 +1,19 @@
-ARG ALPINE_VERSION=latest
-FROM alpine:${ALPINE_VERSION} AS builder
+ARG BASE_VERSION=latest
+FROM alpine:${BASE_VERSION} AS builder
 
 ARG TARGETARCH
 ARG SNELL_VERSION
-ARG USE_LOCAL=false
 
 # 安装必要工具
-RUN if [ "${USE_LOCAL}" != "true" ]; then \
-        apk add --no-cache ca-certificates wget unzip; \
-    else \
-        apk add --no-cache unzip; \
-    fi
+RUN apk add --no-cache ca-certificates wget unzip
 
 # 创建工作目录
 RUN mkdir -p /tmp/snell
 
-# 复制 Version 目录（如果存在）
+# 复制 Version 目录
 COPY Version /tmp/Version
 
-# 映射架构并下载或使用仓库中的 snell-server
+# 下载或使用仓库中的 snell-server
 RUN set -ex && \
     case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
@@ -27,30 +22,21 @@ RUN set -ex && \
         arm/v7|arm) ARCH="armv7l" ;; \
         *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
-    VERSION_NUM="${SNELL_VERSION#v}" && \
-    echo "→ Version: ${VERSION_NUM}, Arch: ${ARCH}" && \
-    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
-    FILE_PATH="/tmp/Version/${VERSION_NUM}/snell-server-v${VERSION_NUM}-linux-${ARCH}.zip" && \
-    echo "→ 检查仓库文件: ${FILE_PATH}" && \
-    ls -la /tmp/Version/ || true && \
-    ls -la /tmp/Version/${VERSION_NUM}/ || true && \
-    if [ "${USE_LOCAL}" = "true" ] && [ -f "${FILE_PATH}" ]; then \
-        echo "→ 使用仓库文件: ${FILE_PATH}"; \
-        cp "${FILE_PATH}" /tmp/snell.zip; \
+    echo "→ Snell Version: ${SNELL_VERSION}, Arch: ${ARCH}" && \
+    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip" && \
+    REPO_FILE="/tmp/Version/${SNELL_VERSION}/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip" && \
+    echo "→ 尝试官方下载: ${DOWNLOAD_URL}" && \
+    if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
+        echo "✓ 官方下载成功"; \
     else \
-        echo "→ 官方下载: ${DOWNLOAD_URL}"; \
-        if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
-            echo "✓ 下载成功"; \
+        echo "⚠️ 官方下载失败，尝试使用仓库文件"; \
+        if [ -f "${REPO_FILE}" ]; then \
+            echo "✓ 使用仓库文件: ${REPO_FILE}"; \
+            cp "${REPO_FILE}" /tmp/snell.zip; \
         else \
-            echo "⚠ 下载失败，尝试使用仓库文件"; \
-            if [ -f "${FILE_PATH}" ]; then \
-                echo "✓ 使用仓库文件: ${FILE_PATH}"; \
-                cp "${FILE_PATH}" /tmp/snell.zip; \
-            else \
-                echo "✗ 构建失败：无法下载且仓库中无文件"; \
-                echo "✗ 请在 Version/${VERSION_NUM}/ 目录下添加 snell 文件或确保网络可访问"; \
-                exit 1; \
-            fi; \
+            echo "❌ 构建失败：官方下载失败且仓库中无备份文件"; \
+            echo "提示：请在 Version/${SNELL_VERSION}/ 目录下添加 snell 文件"; \
+            exit 1; \
         fi; \
     fi && \
     unzip /tmp/snell.zip -d /tmp/snell && \
@@ -58,14 +44,14 @@ RUN set -ex && \
     echo "✓ Snell Server 准备完成"
 
 # 最终运行镜像
-FROM alpine:${ALPINE_VERSION}
+FROM alpine:${BASE_VERSION}
 
 ARG SNELL_VERSION
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装运行时依赖（Alpine 需要 libstdc++）
+# 安装运行时依赖
 RUN apk add --no-cache ca-certificates libstdc++ bash openssl
 
 # 创建工作目录
