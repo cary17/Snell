@@ -190,6 +190,7 @@ jobs:
           build-args: |
             SNELL_VERSION=${{ steps.prep.outputs.version }}
             BASE_VERSION=${{ steps.prep.outputs.base_version }}
+            TARGETARCH=$TARGETARCH
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
