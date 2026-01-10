@@ -43,23 +43,50 @@ RUN set -ex && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
-# 最终运行镜像 - 使用 glibc 兼容层
+# 最终运行镜像
 FROM alpine:${BASE_VERSION}
 
 ARG SNELL_VERSION
+ARG TARGETARCH
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
-LABEL org.opencontainers.image.description="Snell Server (Alpine with glibc)"
+LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装 glibc 兼容层和其他运行时依赖
-# Snell 是用 glibc 编译的，在 Alpine (musl) 上需要 gcompat
+# 安装运行时依赖和 glibc
 RUN apk add --no-cache \
     ca-certificates \
-    libstdc++ \
-    libgcc \
+    wget \
+    tini \
     gcompat \
-    openssl
+    libstdc++ && \
+    case "${TARGETARCH}" in \
+        amd64) \
+            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-2.36-r1.apk"; \
+            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-bin-2.36-r1.apk"; \
+            ;; \
+        arm64) \
+            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-2.35-r1.apk"; \
+            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-bin-2.35-r1.apk"; \
+            ;; \
+        386) \
+            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86/glibc-2.36-r1.apk"; \
+            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86/glibc-bin-2.36-r1.apk"; \
+            ;; \
+        arm/v7|arm) \
+            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/armv7/glibc-2.35-r1.apk"; \
+            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/armv7/glibc-bin-2.35-r1.apk"; \
+            ;; \
+        *) \
+            echo "❌ Unsupported architecture: ${TARGETARCH}"; \
+            exit 1; \
+            ;; \
+    esac && \
+    wget -q -O /tmp/glibc.apk "$GLIBC_URL" && \
+    wget -q -O /tmp/glibc-bin.apk "$GLIBC_BIN_URL" && \
+    apk add --no-cache --allow-untrusted --force-overwrite /tmp/glibc.apk /tmp/glibc-bin.apk && \
+    rm -f /tmp/*.apk && \
+    apk del wget
 
 # 创建工作目录
 RUN mkdir -p /snell
@@ -75,5 +102,5 @@ WORKDIR /snell
 
 EXPOSE 20000
 
-# 使用 root 用户运行（egress-interface 需要 root 权限）
-ENTRYPOINT ["/snell/entrypoint.sh"]
+# 使用 tini 作为 init 进程来正确处理信号
+ENTRYPOINT ["/sbin/tini", "--", "/snell/entrypoint.sh"]
