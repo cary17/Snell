@@ -1,0 +1,33 @@
+# Documentation
+README.md
+*.md
+!README.ghcr.md
+
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# GitHub
+.github
+!.github/workflows
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+tmp/
+temp/
