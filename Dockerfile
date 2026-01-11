@@ -1,4 +1,4 @@
-ARG BASE_VERSION=bookworm
+ARG BASE_VERSION=latest
 FROM --platform=$BUILDPLATFORM debian:${BASE_VERSION}-slim AS builder
 
 ARG TARGETPLATFORM
