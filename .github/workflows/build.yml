@@ -2,7 +2,7 @@ name: Build and Push Snell Docker Image
 
 on:
   schedule:
-    # 每小时执行一次（UTC 时间，对应北京时间每小时整点）
+    # 北京时间每个整点执行（UTC 时间每个整点）
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
@@ -12,10 +12,6 @@ on:
         type: string
       debian_version:
         description: 'Debian版本号（如：bookworm, stable, testing，留空使用 stable）'
-        required: false
-        type: string
-      alpine_version:
-        description: 'Alpine版本号（如：3.19, 3.20, latest，留空使用 latest）'
         required: false
         type: string
       force:
@@ -92,10 +88,6 @@ jobs:
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      matrix:
-        base: [debian, alpine]
-      fail-fast: false
     steps:
       - name: Checkout 代码
         uses: actions/checkout@v4
@@ -126,53 +118,34 @@ jobs:
         id: prep
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          BASE="${{ matrix.base }}"
           
-          # 确定基础镜像版本
-          if [ "$BASE" = "debian" ]; then
-            if [ -n "${{ inputs.debian_version }}" ]; then
-              BASE_VERSION="${{ inputs.debian_version }}"
-            else
-              BASE_VERSION="stable"
-            fi
+          # 确定 Debian 基础镜像版本
+          if [ -n "${{ inputs.debian_version }}" ]; then
+            DEBIAN_VERSION="${{ inputs.debian_version }}"
           else
-            if [ -n "${{ inputs.alpine_version }}" ]; then
-              BASE_VERSION="${{ inputs.alpine_version }}"
-            else
-              BASE_VERSION="latest"
-            fi
+            DEBIAN_VERSION="stable"
           fi
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "base=$BASE" >> $GITHUB_OUTPUT
-          echo "base_version=$BASE_VERSION" >> $GITHUB_OUTPUT
+          echo "debian_version=$DEBIAN_VERSION" >> $GITHUB_OUTPUT
           
           # 构建镜像标签
           GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
           
-          if [ "$BASE" = "debian" ]; then
-            # Debian: version 和 latest
-            TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
-          else
-            # Alpine: version-alpine 和 alpine
-            TAGS="${GHCR_IMAGE}:${VERSION}-alpine,${GHCR_IMAGE}:alpine"
-          fi
+          # 默认标签：version 和 latest
+          TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
           
           # 如果配置了 Docker Hub
           if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
             DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
-            if [ "$BASE" = "debian" ]; then
-              TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
-            else
-              TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION}-alpine,${DOCKER_HUB_IMAGE}:alpine"
-            fi
+            TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
           fi
           
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
           
           echo ""
           echo "📦 构建信息:"
-          echo "  基础镜像: $BASE:$BASE_VERSION"
+          echo "  基础镜像: debian:$DEBIAN_VERSION"
           echo "  Snell 版本: $VERSION"
           echo "  标签: $TAGS"
 
@@ -185,22 +158,22 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ${{ matrix.base == 'alpine' && 'Dockerfile.alpine' || 'Dockerfile' }}
-          platforms: ${{ matrix.base == 'alpine' && 'linux/amd64,linux/arm64' || 'linux/amd64,linux/386,linux/arm64,linux/arm/v7' }}
+          file: Dockerfile
+          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.prep.outputs.tags }}
           build-args: |
             SNELL_VERSION=${{ steps.prep.outputs.version }}
-            BASE_VERSION=${{ steps.prep.outputs.base_version }}
+            BASE_VERSION=${{ steps.prep.outputs.debian_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: 构建摘要
         run: |
-          echo "### ✅ 构建完成 (${{ matrix.base }})" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 构建完成 (debian)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Snell 版本:** ${{ steps.prep.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**基础镜像:** ${{ matrix.base }}:${{ steps.prep.outputs.base_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Debian 版本:** ${{ steps.prep.outputs.debian_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**镜像标签:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
