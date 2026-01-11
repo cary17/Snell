@@ -43,8 +43,9 @@ jobs:
         run: |
           if [ -n "${{ inputs.version }}" ]; then
             INPUT_VERSION="${{ inputs.version }}"
-            # 确保版本号有 v 前缀
-            VERSION="v${INPUT_VERSION#v}"
+            # 统一处理：去掉 v 前缀后再加上
+            VERSION_NUM="${INPUT_VERSION#v}"
+            VERSION="v${VERSION_NUM}"
             echo "✓ 使用指定版本: $VERSION"
           else
             echo "→ 检测最新版本..."
@@ -63,6 +64,7 @@ jobs:
           fi
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📌 最终版本号: $VERSION"
 
       - name: 检查是否需要构建
         id: check_build
