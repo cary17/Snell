@@ -1,4 +1,4 @@
-ARG BASE_VERSION=latest
+ARG BASE_VERSION=stable
 FROM --platform=$BUILDPLATFORM debian:${BASE_VERSION}-slim AS builder
 
 ARG TARGETPLATFORM
