@@ -1,5 +1,5 @@
-ARG BASE_VERSION=edge
-FROM --platform=$BUILDPLATFORM frolvlad/alpine-glibc:${BASE_VERSION} AS builder
+ARG BASE_VERSION=latest
+FROM --platform=$BUILDPLATFORM alpine:${BASE_VERSION} AS builder
 
 ARG TARGETPLATFORM
 ARG SNELL_VERSION
@@ -13,15 +13,13 @@ RUN mkdir -p /tmp/snell
 # 复制 Version 目录
 COPY Version /tmp/Version
 
-# 下载或使用仓库中的 snell-server
+# 下载或使用仓库中的 snell-server (仅 amd64 和 arm64)
 RUN set -ex && \
     echo "→ Build Platform: ${BUILDPLATFORM:-unknown}" && \
     echo "→ Target Platform: ${TARGETPLATFORM:-unknown}" && \
     case "${TARGETPLATFORM}" in \
         linux/amd64) ARCH="amd64" ;; \
-        linux/386) ARCH="i386" ;; \
         linux/arm64) ARCH="aarch64" ;; \
-        linux/arm/v7) ARCH="armv7l" ;; \
         *) echo "❌ Unsupported platform: ${TARGETPLATFORM}" && exit 1 ;; \
     esac && \
     VERSION="${SNELL_VERSION#v}" && \
@@ -48,17 +46,39 @@ RUN set -ex && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
-# 最终运行镜像 - 使用带 glibc 的 Alpine 基础镜像
-FROM frolvlad/alpine-glibc:${BASE_VERSION}
+# 最终运行镜像
+FROM alpine:${BASE_VERSION}
 
+ARG TARGETPLATFORM
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
-LABEL org.opencontainers.image.description="Snell Server (Alpine with glibc)"
+LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装运行时依赖
-RUN apk add --no-cache ca-certificates tini libstdc++
+# 安装运行时依赖和 glibc
+RUN apk add --no-cache ca-certificates tini libstdc++ && \
+    case "${TARGETPLATFORM}" in \
+        linux/amd64) \
+            GLIBC_VER="2.36-r1"; \
+            GLIBC_ARCH="x86_64"; \
+            ;; \
+        linux/arm64) \
+            GLIBC_VER="2.35-r1"; \
+            GLIBC_ARCH="aarch64"; \
+            ;; \
+        *) \
+            echo "❌ Unsupported platform: ${TARGETPLATFORM}"; \
+            exit 1; \
+            ;; \
+    esac && \
+    echo "→ Installing glibc ${GLIBC_VER} for ${GLIBC_ARCH}..." && \
+    wget -q -O /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub && \
+    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-${GLIBC_VER}.apk && \
+    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-bin-${GLIBC_VER}.apk && \
+    apk add --no-cache --force-overwrite glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk && \
+    rm -f glibc-*.apk /etc/apk/keys/sgerrand.rsa.pub && \
+    echo "✓ glibc installed successfully"
 
 # 创建工作目录
 RUN mkdir -p /snell
