@@ -2,7 +2,6 @@ name: Build and Push Snell Docker Image
 
 on:
   schedule:
-    # 北京时间每个整点执行（UTC 时间每个整点）
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
@@ -38,13 +37,11 @@ jobs:
         run: |
           if [ -n "${{ inputs.version }}" ]; then
             INPUT_VERSION="${{ inputs.version }}"
-            # 统一处理：去掉 v 前缀后再加上
             VERSION_NUM="${INPUT_VERSION#v}"
             VERSION="v${VERSION_NUM}"
             echo "✓ 使用指定版本: $VERSION"
           else
             echo "→ 检测最新版本..."
-            # 从官方 Release Notes 页面提取最新版本
             LATEST_VERSION=$(curl -sL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | \
               grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
               sort -Vru | head -n 1)
@@ -73,7 +70,6 @@ jobs:
             exit 0
           fi
           
-          # 检查 GHCR 是否已存在该版本
           if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:${VERSION} >/dev/null 2>&1; then
             echo "→ 版本 ${VERSION} 已存在于 GHCR"
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -121,7 +117,6 @@ jobs:
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
           
-          # 确定 Debian 基础镜像版本
           if [ -n "${{ inputs.debian_version }}" ]; then
             DEBIAN_VERSION="${{ inputs.debian_version }}"
           else
@@ -131,21 +126,15 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "debian_version=$DEBIAN_VERSION" >> $GITHUB_OUTPUT
           
-          # 构建镜像标签
           GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
-          
-          # 默认标签：version 和 latest
           TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
           
-          # 如果配置了 Docker Hub
           if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
             DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
             TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
           fi
           
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
-          
-          # 构建日期和 Git commit
           echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
           echo "vcs_ref=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           
@@ -187,6 +176,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: 更新 GHCR 包描述
+        if: success()
+        continue-on-error: true
+        run: |
+          sleep 5
+          echo "→ 更新 GHCR 包描述..."
+          
+          DESCRIPTION="Multi-arch Snell Server ${{ steps.prep.outputs.version }}. Platforms: amd64, 386, arm64, armv7. Docs: https://github.com/${{ github.repository }}"
+          
+          curl -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/user/packages/container/snell" \
+            -d "{\"description\":\"${DESCRIPTION}\"}" \
+            && echo "✓ GHCR 描述已更新" \
+            || echo "⚠️ GHCR 描述更新失败（不影响构建）"
+
       - name: 构建摘要
         run: |
           echo "### ✅ 构建完成" >> $GITHUB_STEP_SUMMARY
@@ -198,7 +205,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**支持架构:** linux/amd64, linux/386, linux/arm64, linux/arm/v7" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**镜像标签:**" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.prep.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
+          echo "**镜像地址:**" >> $GITHUB_STEP_SUMMARY
+          echo "- GHCR: \`ghcr.io/${{ github.repository_owner }}/snell:${{ steps.prep.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- GHCR: \`ghcr.io/${{ github.repository_owner }}/snell:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**快速使用:**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker run -d -p 20000:20000 -e PSK=your_password ghcr.io/${{ github.repository_owner }}/snell:latest" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
