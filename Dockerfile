@@ -78,7 +78,5 @@ RUN chmod +x /snell/entrypoint.sh /snell/snell-server
 
 WORKDIR /snell
 
-EXPOSE 20000
-
 # 使用 tini 作为 init 进程来正确处理信号
 ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
