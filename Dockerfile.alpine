@@ -56,44 +56,6 @@ LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-doc
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装运行时依赖和glibc 2.36-r1（已验证可用）
-RUN apk add --no-cache ca-certificates tini libstdc++ && \
-    echo "→ 安装glibc 2.36-r1（已验证支持Snell）..." && \
-    # 根据架构设置参数
-    case "${TARGETPLATFORM}" in \
-        linux/amd64) \
-            GLIBC_VER="2.36-r1" \
-            GLIBC_ARCH="x86_64" \
-            ;; \
-        linux/arm64) \
-            GLIBC_VER="2.36-r1" \
-            GLIBC_ARCH="aarch64" \
-            ;; \
-        *) \
-            echo "❌ Unsupported platform: ${TARGETPLATFORM}" && \
-            exit 1 \
-            ;; \
-    esac && \
-    # 安装wget（比curl更稳定）
-    apk add --no-cache --virtual .glibc-deps wget && \
-    # 下载并安装glibc
-    echo "→ 下载glibc签名密钥..." && \
-    wget -q -O /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub && \
-    echo "→ 下载glibc包..." && \
-    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-${GLIBC_VER}.apk && \
-    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-bin-${GLIBC_VER}.apk && \
-    echo "→ 安装glibc..." && \
-    apk add --no-cache --force-overwrite glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk && \
-    echo "✓ glibc安装成功" && \
-    # 清理
-    echo "→ 清理临时文件..." && \
-    rm -f glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk /etc/apk/keys/sgerrand.rsa.pub && \
-    apk del .glibc-deps && \
-    # 验证安装
-    echo "→ 验证glibc安装..." && \
-    ls -la /usr/glibc-compat/lib/ld-* 2>/dev/null | head -2 && \
-    echo "✓ glibc安装验证完成"
-
 # 创建工作目录
 RUN mkdir -p /snell
 
@@ -101,13 +63,85 @@ RUN mkdir -p /snell
 COPY --from=builder /tmp/snell/snell-server /snell/snell-server
 COPY entrypoint.sh /snell/entrypoint.sh
 
-# 设置执行权限
-RUN chmod +x /snell/entrypoint.sh /snell/snell-server
+# 安装运行时依赖和glibc - 严格验证版本
+RUN apk add --no-cache wget unzip tini gcompat libstdc++ ca-certificates && \
+    echo "→ 为不同架构安装glibc..." && \
+    case "${TARGETPLATFORM}" in \
+        linux/amd64) \
+            echo "→ 目标架构: x86_64 (amd64)" && \
+            GLIBC_VER="2.36-r1" && \
+            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-2.36-r1.apk" && \
+            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-bin-2.36-r1.apk" && \
+            GLIBC_URL_BACKUP1="https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.36-r1/glibc-2.36-r1.apk" && \
+            GLIBC_BIN_URL_BACKUP1="https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.36-r1/glibc-bin-2.36-r1.apk" && \
+            GLIBC_LIB="ld-linux-x86-64.so.2" \
+            ;; \
+        linux/arm64) \
+            echo "→ 目标架构: aarch64 (arm64)" && \
+            GLIBC_VER="2.35-r1" && \
+            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-2.35-r1.apk" && \
+            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-bin-2.35-r1.apk" && \
+            GLIBC_URL_BACKUP1="https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.35-r1/glibc-2.35-r1.apk" && \
+            GLIBC_BIN_URL_BACKUP1="https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.35-r1/glibc-bin-2.35-r1.apk" && \
+            GLIBC_LIB="ld-linux-aarch64.so.1" \
+            ;; \
+        *) \
+            echo "❌ 不支持的平台: ${TARGETPLATFORM}" && exit 1 \
+            ;; \
+    esac && \
+    echo "→ glibc版本: ${GLIBC_VER}" && \
+    # 下载glibc包
+    echo "→ 下载glibc包..." && \
+    download_apk() { \
+        local url="$1" backup_url="$2" output="$3" name="$4" && \
+        echo "下载 ${name}..." && \
+        if wget -q -O "$output" "$url"; then \
+            echo "✓ ${name} 主源下载成功" && \
+            return 0; \
+        elif wget -q -O "$output" "$backup_url"; then \
+            echo "✓ ${name} 备用源下载成功" && \
+            return 0; \
+        else \
+            echo "❌ ${name} 下载失败" && \
+            return 1; \
+        fi; \
+    } && \
+    download_apk "$GLIBC_URL" "$GLIBC_URL_BACKUP1" /tmp/glibc.apk "glibc" && \
+    download_apk "$GLIBC_BIN_URL" "$GLIBC_BIN_URL_BACKUP1" /tmp/glibc-bin.apk "glibc-bin" && \
+    # 安装glibc
+    echo "→ 安装glibc..." && \
+    apk add --no-cache --allow-untrusted --force-overwrite /tmp/glibc.apk /tmp/glibc-bin.apk || (echo "❌ glibc安装失败" && exit 1) && \
+    echo "✓ glibc安装成功" && \
+    # 清理临时文件
+    rm -f /tmp/*.apk && \
+    # 验证glibc安装
+    echo "→ 验证glibc安装..." && \
+    if [ ! -f "/usr/glibc-compat/lib/${GLIBC_LIB}" ]; then \
+        echo "❌ 错误：glibc核心库文件未找到: ${GLIBC_LIB}" && \
+        echo "glibc安装失败，构建终止" && \
+        exit 1; \
+    fi && \
+    echo "✓ glibc核心库验证成功: /usr/glibc-compat/lib/${GLIBC_LIB}" && \
+    # 设置执行权限
+    chmod +x /snell/entrypoint.sh /snell/snell-server
 
-# 验证Snell可以运行
-RUN echo "→ 验证Snell运行..." && \
-    /snell/snell-server --help 2>&1 | head -1 && \
-    echo "✓ Snell验证通过"
+# 关键验证：测试Snell是否能运行
+RUN echo "→ 关键验证：测试Snell运行..." && \
+    if /snell/snell-server --version 2>/dev/null || /snell/snell-server --help 2>/dev/null; then \
+        echo "✓ Snell验证成功，可以正常运行"; \
+    else \
+        echo "❌ 严重错误：Snell无法运行！" && \
+        echo "可能原因：" && \
+        echo "1. glibc版本不兼容" && \
+        echo "2. 二进制文件损坏" && \
+        echo "3. 缺少依赖库" && \
+        echo "" && \
+        echo "验证信息：" && \
+        echo "文件权限: $(ls -la /snell/snell-server)" && \
+        echo "文件类型: $(file /snell/snell-server 2>/dev/null || echo '无法识别')" && \
+        echo "依赖库: $(ldd /snell/snell-server 2>/dev/null || echo 'ldd失败')" && \
+        exit 1; \
+    fi
 
 WORKDIR /snell
 
