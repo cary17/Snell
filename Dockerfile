@@ -27,9 +27,11 @@ RUN set -ex && \
         arm/v7|arm) ARCH="armv7l" ;; \
         *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
-    echo "→ Snell Version: ${SNELL_VERSION}, Arch: ${ARCH}" && \
-    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip" && \
-    REPO_FILE="/tmp/Version/${SNELL_VERSION}/snell-server-${SNELL_VERSION}-linux-${ARCH}.zip" && \
+    VERSION="${SNELL_VERSION#v}" && \
+    VERSION_WITH_V="v${VERSION}" && \
+    echo "→ Snell Version: ${VERSION_WITH_V}, Arch: ${ARCH}" && \
+    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
+    REPO_FILE="/tmp/Version/${VERSION_WITH_V}/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
     echo "→ 尝试官方下载: ${DOWNLOAD_URL}" && \
     if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
         echo "✓ 官方下载成功"; \
@@ -40,7 +42,7 @@ RUN set -ex && \
             cp "${REPO_FILE}" /tmp/snell.zip; \
         else \
             echo "❌ 构建失败：官方下载失败且仓库中无备份文件"; \
-            echo "提示：请在 Version/${SNELL_VERSION}/ 目录下添加 snell 文件"; \
+            echo "提示：请在 Version/${VERSION_WITH_V}/ 目录下添加 snell 文件"; \
             exit 1; \
         fi; \
     fi && \
@@ -51,7 +53,6 @@ RUN set -ex && \
 # 最终运行镜像
 FROM debian:${BASE_VERSION}-slim
 
-# 重要：在新的构建阶段必须重新声明 ARG
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
