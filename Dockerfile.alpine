@@ -1,7 +1,7 @@
 ARG BASE_VERSION=3.21
-FROM alpine:${BASE_VERSION} AS builder
+FROM --platform=$BUILDPLATFORM alpine:${BASE_VERSION} AS builder
 
-ARG TARGETARCH
+ARG TARGETPLATFORM
 ARG SNELL_VERSION
 
 # 安装必要工具
@@ -15,32 +15,34 @@ COPY Version /tmp/Version
 
 # 下载或使用仓库中的 snell-server
 RUN set -ex && \
-    case "${TARGETARCH}" in \
-        amd64) ARCH="amd64" ;; \
-        386) ARCH="i386" ;; \
-        arm64) ARCH="aarch64" ;; \
-        arm/v7|arm) ARCH="armv7l" ;; \
-        *) echo "❌ Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+    echo "→ Build Platform: ${BUILDPLATFORM:-unknown}" && \
+    echo "→ Target Platform: ${TARGETPLATFORM:-unknown}" && \
+    case "${TARGETPLATFORM}" in \
+        linux/amd64) ARCH="amd64" ;; \
+        linux/386) ARCH="i386" ;; \
+        linux/arm64) ARCH="aarch64" ;; \
+        linux/arm/v7) ARCH="armv7l" ;; \
+        *) echo "❌ Unsupported platform: ${TARGETPLATFORM}" && exit 1 ;; \
     esac && \
     VERSION="${SNELL_VERSION#v}" && \
     VERSION_WITH_V="v${VERSION}" && \
     echo "→ Snell Version: ${VERSION_WITH_V}, Arch: ${ARCH}" && \
     DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
     REPO_FILE="/tmp/Version/${VERSION_WITH_V}/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
-    echo "→ 尝试官方下载: ${DOWNLOAD_URL}" && \
-    if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}" 2>&1; then \
-        echo "✓ 官方下载成功"; \
+    if [ -f "${REPO_FILE}" ]; then \
+        echo "✓ 使用仓库文件: ${REPO_FILE}"; \
+        cp "${REPO_FILE}" /tmp/snell.zip; \
     else \
-        echo "⚠️ 官方下载失败，尝试使用仓库文件"; \
-        if [ -f "${REPO_FILE}" ]; then \
-            echo "✓ 使用仓库文件: ${REPO_FILE}"; \
-            cp "${REPO_FILE}" /tmp/snell.zip; \
+        echo "→ 仓库文件不存在，尝试官方下载: ${DOWNLOAD_URL}"; \
+        if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}"; then \
+            echo "✓ 官方下载成功"; \
         else \
             echo "❌ 构建失败：官方下载失败且仓库中无备份文件"; \
-            echo "提示：请在 Version/${VERSION_WITH_V}/ 目录下添加 snell 文件"; \
+            echo "提示：请运行 ./download-snell.sh ${VERSION_WITH_V} 下载文件"; \
             exit 1; \
         fi; \
     fi && \
+    echo "→ 解压文件..." && \
     unzip /tmp/snell.zip -d /tmp/snell && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
@@ -48,45 +50,45 @@ RUN set -ex && \
 # 最终运行镜像
 FROM alpine:${BASE_VERSION}
 
-ARG TARGETARCH
+ARG TARGETPLATFORM
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装基础依赖并下载安装 glibc
+# 安装基础依赖
 RUN apk add --no-cache ca-certificates wget tini gcompat libstdc++
 
-# 分开安装 glibc（更容易调试）
+# 安装 glibc（针对不同架构）
 RUN set -ex && \
-    echo "→ Target Architecture: ${TARGETARCH}" && \
-    case "${TARGETARCH}" in \
-        amd64) \
+    echo "→ Target Platform: ${TARGETPLATFORM:-unknown}" && \
+    case "${TARGETPLATFORM}" in \
+        linux/amd64) \
             GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-2.36-r1.apk"; \
             GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-bin-2.36-r1.apk"; \
             ;; \
-        arm64) \
+        linux/arm64) \
             GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-2.35-r1.apk"; \
             GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-bin-2.35-r1.apk"; \
             ;; \
-        386) \
+        linux/386) \
             GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86/glibc-2.36-r1.apk"; \
             GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86/glibc-bin-2.36-r1.apk"; \
             ;; \
-        arm/v7|arm) \
+        linux/arm/v7) \
             GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/armv7/glibc-2.35-r1.apk"; \
             GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/armv7/glibc-bin-2.35-r1.apk"; \
             ;; \
         *) \
-            echo "❌ Unsupported architecture: ${TARGETARCH}"; \
+            echo "❌ Unsupported platform: ${TARGETPLATFORM}"; \
             exit 1; \
             ;; \
     esac && \
     echo "→ Downloading glibc from: ${GLIBC_URL}" && \
-    wget -O /tmp/glibc.apk "$GLIBC_URL" && \
+    wget -O /tmp/glibc.apk "$GLIBC_URL" || { echo "❌ glibc download failed"; exit 1; } && \
     echo "→ Downloading glibc-bin from: ${GLIBC_BIN_URL}" && \
-    wget -O /tmp/glibc-bin.apk "$GLIBC_BIN_URL" && \
+    wget -O /tmp/glibc-bin.apk "$GLIBC_BIN_URL" || { echo "❌ glibc-bin download failed"; exit 1; } && \
     echo "→ Installing glibc packages..." && \
     apk add --no-cache --allow-untrusted --force-overwrite /tmp/glibc.apk /tmp/glibc-bin.apk && \
     rm -f /tmp/*.apk && \
