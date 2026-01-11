@@ -36,17 +36,16 @@ services:
 
 ## Environment Variables
 
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `PSK` | Pre-shared key (password) | Random | No |
-| `PORT` | Listen port | `20000` | No |
-| `LISTEN` | Listen address | `:::${PORT}` | No |
-| `IPV6` | Enable IPv6 | `false` | No |
-| `DNS` | Custom DNS servers | - | No |
-| `OBFS` | Obfuscation mode (`http`, `tls`) | - | No |
-| `HOST` | Obfuscation host (with `OBFS`) | - | No |
-| `EGRESS_INTERFACE` | Egress network interface | - | No |
-| `LOG` | Log level | `notify` | No |
+| 变量 | 说明 | 默认值 | 是否必需 |
+|------|------|--------|----------|
+| `PORT` | 监听端口 | `20000` | **建议修改** |
+| `PSK` | 预共享密钥 | 通过openssl rand --base64 16生成 | 否 |
+| `IPV6` | 启用 IPv6 | `false` | 否 |
+| `LISTEN` | 完整监听配置 | `:::${PORT}` | 否 |
+| `DNS` | DNS 服务器（多个用逗号分隔，需v4.1.0及以上版本） | - | 否 |
+| `EGRESS_INTERFACE` | 出口网络接口（需要 root 权限，需v5.0.0及以上版本） | - | 否 |
+| `OBFS` | 混淆模式（`http`/`tls`）(v4.0.0及以上不建议设置) | - | 否 |
+| `HOST` | 混淆主机名（设置OBFS后必须设置） | - | 否 |
 
 ## Available Tags
 
