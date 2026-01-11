@@ -66,12 +66,12 @@ LABEL org.opencontainers.image.title="Snell Server" \
       org.opencontainers.image.version="${SNELL_VERSION}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.url="https://github.com/OWNER/REPO" \
-      org.opencontainers.image.source="https://github.com/OWNER/REPO" \
-      org.opencontainers.image.documentation="https://github.com/OWNER/REPO#readme" \
-      org.opencontainers.image.vendor="OWNER" \
+      org.opencontainers.image.url="https://github.com/cary17/snell-docker" \
+      org.opencontainers.image.source="https://github.com/cary17/snell-docker" \
+      org.opencontainers.image.documentation="https://github.com/cary17/snell-docker#readme" \
+      org.opencontainers.image.vendor="cary17" \
       org.opencontainers.image.licenses="MIT" \
-      maintainer="OWNER"
+      maintainer="cary17"
 
 # 只安装运行时必需的最小依赖
 RUN apt-get update && \
@@ -92,6 +92,9 @@ COPY entrypoint.sh /snell/entrypoint.sh
 RUN chmod +x /snell/entrypoint.sh /snell/snell-server
 
 WORKDIR /snell
+
+# 暴露默认端口
+EXPOSE 20000
 
 # 使用 tini 作为 init 进程来正确处理信号
 ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
