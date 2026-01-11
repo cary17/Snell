@@ -5,7 +5,7 @@ ARG TARGETPLATFORM
 ARG SNELL_VERSION
 
 # 安装必要工具
-RUN apk add --no-cache ca-certificates wget unzip
+RUN apk add --no-cache ca-certificates curl unzip
 
 # 创建工作目录
 RUN mkdir -p /tmp/snell
@@ -29,13 +29,14 @@ RUN set -ex && \
     echo "→ Snell Version: ${VERSION_WITH_V}, Arch: ${ARCH}" && \
     DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
     REPO_FILE="/tmp/Version/${VERSION_WITH_V}/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
-    if [ -f "${REPO_FILE}" ]; then \
-        echo "✓ 使用仓库文件: ${REPO_FILE}"; \
-        cp "${REPO_FILE}" /tmp/snell.zip; \
+    echo "→ 尝试官方下载: ${DOWNLOAD_URL}" && \
+    if curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/snell.zip "${DOWNLOAD_URL}"; then \
+        echo "✓ 官方下载成功"; \
     else \
-        echo "→ 仓库文件不存在，尝试官方下载: ${DOWNLOAD_URL}"; \
-        if wget --timeout=30 --tries=3 -O /tmp/snell.zip "${DOWNLOAD_URL}"; then \
-            echo "✓ 官方下载成功"; \
+        echo "⚠️ 官方下载失败，尝试使用仓库文件"; \
+        if [ -f "${REPO_FILE}" ]; then \
+            echo "✓ 使用仓库文件: ${REPO_FILE}"; \
+            cp "${REPO_FILE}" /tmp/snell.zip; \
         else \
             echo "❌ 构建失败：官方下载失败且仓库中无备份文件"; \
             echo "提示：请运行 ./download-snell.sh ${VERSION_WITH_V} 下载文件"; \
@@ -57,8 +58,8 @@ LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-doc
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装基础依赖
-RUN apk add --no-cache ca-certificates wget tini gcompat libstdc++
+# 安装基础依赖和 curl
+RUN apk add --no-cache ca-certificates curl tini gcompat libstdc++
 
 # 安装 glibc（针对不同架构）
 RUN set -ex && \
@@ -86,13 +87,19 @@ RUN set -ex && \
             ;; \
     esac && \
     echo "→ Downloading glibc from: ${GLIBC_URL}" && \
-    wget -O /tmp/glibc.apk "$GLIBC_URL" || { echo "❌ glibc download failed"; exit 1; } && \
+    if ! curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/glibc.apk "$GLIBC_URL"; then \
+        echo "❌ glibc download failed"; \
+        exit 1; \
+    fi && \
     echo "→ Downloading glibc-bin from: ${GLIBC_BIN_URL}" && \
-    wget -O /tmp/glibc-bin.apk "$GLIBC_BIN_URL" || { echo "❌ glibc-bin download failed"; exit 1; } && \
+    if ! curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/glibc-bin.apk "$GLIBC_BIN_URL"; then \
+        echo "❌ glibc-bin download failed"; \
+        exit 1; \
+    fi && \
     echo "→ Installing glibc packages..." && \
     apk add --no-cache --allow-untrusted --force-overwrite /tmp/glibc.apk /tmp/glibc-bin.apk && \
     rm -f /tmp/*.apk && \
-    apk del wget && \
+    apk del curl && \
     echo "✓ glibc installed successfully"
 
 # 创建工作目录
