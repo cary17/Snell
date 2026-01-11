@@ -1,15 +1,12 @@
-# Snell Server Docker Image
 
-Multi-architecture Snell Server Docker image with automatic builds.
-
-## Supported Architectures
+## 支持平台
 
 - `linux/amd64` - x86_64
 - `linux/386` - x86
 - `linux/arm64` - ARM 64位
 - `linux/arm/v7` - ARM 32位
 
-## Quick Start
+## 快速开始
 ```bash
 docker run -d \
   --name snell \
@@ -34,7 +31,7 @@ services:
       - IPV6=false
 ```
 
-## Environment Variables
+## 环境变量
 
 | 变量 | 说明 | 默认值 | 是否必需 |
 |------|------|--------|----------|
@@ -47,16 +44,8 @@ services:
 | `OBFS` | 混淆模式（`http`/`tls`）(v4.0.0及以上不建议设置) | - | 否 |
 | `HOST` | 混淆主机名（设置OBFS后必须设置） | - | 否 |
 
-## Available Tags
+## 可用标签
 
 - `latest` - Latest version
 - `vX.Y.Z` - Specific version
 
-## Full Documentation
-
-Complete documentation, examples, and troubleshooting guide available at:
-**https://github.com/OWNER/REPO**
-
-## License
-
-Docker packaging only. Snell Server © [Surge Networks Inc.](https://nssurge.com/)
