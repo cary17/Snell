@@ -10,7 +10,7 @@
 ```bash
 docker run -d \
   --name snell \
-  --restart unless-stopped \
+  --restart always \
   -p 20000:20000 \
   -e PSK=your_password \
   ghcr.io/cary17/snell:latest
@@ -22,7 +22,7 @@ services:
   snell:
     image: ghcr.io/cary17/snell:latest
     container_name: snell
-    restart: unless-stopped
+    restart: always
     ports:
       - "20000:20000"
     environment:
