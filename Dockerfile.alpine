@@ -46,15 +46,24 @@ RUN set -ex && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
-# 最终运行镜像
-FROM alpine:${BASE_VERSION}
+# 最终运行镜像 - 使用自带glibc的Alpine镜像
+FROM frolvlad/alpine-glibc:alpine-3.19_glibc-2.38
 
 ARG TARGETPLATFORM
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
-LABEL org.opencontainers.image.description="Snell Server (Alpine)"
+LABEL org.opencontainers.image.description="Snell Server (Alpine with glibc)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
+
+# 验证glibc已安装
+RUN echo "→ 验证glibc安装..." && \
+    /usr/glibc-compat/bin/ldd --version 2>&1 | head -1 && \
+    echo "✓ glibc已预安装"
+
+# 安装最小化运行时依赖（基础镜像已包含ca-certificates）
+RUN apk add --no-cache tini libstdc++ && \
+    echo "✓ 运行时依赖安装完成"
 
 # 创建工作目录
 RUN mkdir -p /snell
@@ -63,43 +72,17 @@ RUN mkdir -p /snell
 COPY --from=builder /tmp/snell/snell-server /snell/snell-server
 COPY entrypoint.sh /snell/entrypoint.sh
 
-# 安装运行时依赖和glibc - 使用国内镜像源，简化流程
-RUN apk add --no-cache wget tini libstdc++ ca-certificates && \
-    echo "→ 根据架构下载并安装glibc..." && \
-    case "${TARGETPLATFORM}" in \
-        linux/amd64) \
-            echo "→ 架构: x86_64 (amd64)" && \
-            # 直接下载并安装，不验证签名（国内镜像可能没有签名）
-            wget -q -O /tmp/glibc.apk https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-2.36-r1.apk && \
-            wget -q -O /tmp/glibc-bin.apk https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-bin-2.36-r1.apk \
-            ;; \
-        linux/arm64) \
-            echo "→ 架构: aarch64 (arm64)" && \
-            wget -q -O /tmp/glibc.apk https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-2.35-r1.apk && \
-            wget -q -O /tmp/glibc-bin.apk https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-bin-2.35-r1.apk \
-            ;; \
-        *) \
-            echo "❌ 不支持的平台: ${TARGETPLATFORM}" && exit 1 \
-            ;; \
-    esac && \
-    echo "→ 安装glibc..." && \
-    # 强制安装，跳过签名验证
-    apk add --no-cache --force-overwrite --allow-untrusted /tmp/glibc.apk /tmp/glibc-bin.apk && \
-    echo "✓ glibc安装成功" && \
-    # 清理
-    rm -f /tmp/*.apk && \
-    # 设置执行权限
-    chmod +x /snell/entrypoint.sh /snell/snell-server && \
-    # 必须验证Snell能运行
+# 设置执行权限并验证
+RUN chmod +x /snell/entrypoint.sh /snell/snell-server && \
     echo "→ 验证Snell运行..." && \
     if /snell/snell-server --version 2>/dev/null || /snell/snell-server --help 2>&1 | head -1 >/dev/null; then \
         echo "✓ Snell验证成功"; \
     else \
-        echo "❌ Snell无法运行，构建失败" && \
+        echo "❌ Snell无法运行！" && \
         echo "调试信息:" && \
-        echo "文件大小: $(ls -lh /snell/snell-server)" && \
-        echo "文件类型: $(file /snell/snell-server 2>/dev/null || echo '无法识别')" && \
-        echo "glibc版本: $(/usr/glibc-compat/bin/ldd --version 2>/dev/null | head -1 || echo '无法获取')" && \
+        echo "文件: $(file /snell/snell-server 2>/dev/null || echo '未知')" && \
+        echo "glibc版本: $(/usr/glibc-compat/bin/ldd --version 2>&1 | head -1)" && \
+        echo "依赖: $(ldd /snell/snell-server 2>&1 || echo 'ldd失败')" && \
         exit 1; \
     fi
 
