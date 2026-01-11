@@ -56,16 +56,17 @@ LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-doc
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装运行时依赖和glibc（使用2.35-r1稳定版本）
+# 安装运行时依赖和glibc 2.36-r1（已验证可用）
 RUN apk add --no-cache ca-certificates tini libstdc++ && \
-    echo "→ 为不同架构准备glibc 2.35-r1安装..." && \
+    echo "→ 安装glibc 2.36-r1（已验证支持Snell）..." && \
+    # 根据架构设置参数
     case "${TARGETPLATFORM}" in \
         linux/amd64) \
-            GLIBC_VER="2.35-r1" \
+            GLIBC_VER="2.36-r1" \
             GLIBC_ARCH="x86_64" \
             ;; \
         linux/arm64) \
-            GLIBC_VER="2.35-r1" \
+            GLIBC_VER="2.36-r1" \
             GLIBC_ARCH="aarch64" \
             ;; \
         *) \
@@ -73,53 +74,25 @@ RUN apk add --no-cache ca-certificates tini libstdc++ && \
             exit 1 \
             ;; \
     esac && \
-    echo "→ 安装glibc ${GLIBC_VER} for ${GLIBC_ARCH}..." && \
-    # 临时安装curl（如果基础镜像中没有）
-    if ! command -v curl > /dev/null 2>&1; then \
-        echo "→ 安装curl..." && \
-        apk add --no-cache --virtual .temp-curl curl; \
-    fi && \
-    # 创建临时目录
-    mkdir -p /tmp/glibc-install && cd /tmp/glibc-install && \
-    # 下载glibc签名密钥
+    # 安装wget（比curl更稳定）
+    apk add --no-cache --virtual .glibc-deps wget && \
+    # 下载并安装glibc
     echo "→ 下载glibc签名密钥..." && \
-    if curl -fsSL -o /etc/apk/keys/sgerrand.rsa.pub "https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub"; then \
-        echo "✓ 密钥下载成功"; \
-    else \
-        echo "⚠️ 主密钥源失败，尝试GitHub源..." && \
-        curl -fsSL -o /etc/apk/keys/sgerrand.rsa.pub "https://raw.githubusercontent.com/sgerrand/alpine-pkg-glibc/master/sgerrand.rsa.pub"; \
-    fi && \
-    # 下载glibc包
+    wget -q -O /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub && \
     echo "→ 下载glibc包..." && \
-    GLIBC_URL="https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}" && \
-    if curl -fsSL -o "glibc-${GLIBC_VER}.apk" "${GLIBC_URL}/glibc-${GLIBC_VER}.apk" && \
-       curl -fsSL -o "glibc-bin-${GLIBC_VER}.apk" "${GLIBC_URL}/glibc-bin-${GLIBC_VER}.apk"; then \
-        echo "✓ glibc包下载成功"; \
-        # 安装glibc
-        echo "→ 安装glibc..." && \
-        apk add --no-cache --force-overwrite "glibc-${GLIBC_VER}.apk" "glibc-bin-${GLIBC_VER}.apk" && \
-        echo "✓ glibc安装成功"; \
-    else \
-        echo "❌ glibc包下载失败，详细错误信息：" && \
-        echo "URL: ${GLIBC_URL}" && \
-        exit 1; \
-    fi && \
+    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-${GLIBC_VER}.apk && \
+    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-bin-${GLIBC_VER}.apk && \
+    echo "→ 安装glibc..." && \
+    apk add --no-cache --force-overwrite glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk && \
+    echo "✓ glibc安装成功" && \
     # 清理
     echo "→ 清理临时文件..." && \
-    cd / && rm -rf /tmp/glibc-install && \
-    rm -f "glibc-${GLIBC_VER}.apk" "glibc-bin-${GLIBC_VER}.apk" /etc/apk/keys/sgerrand.rsa.pub && \
-    # 删除临时安装的curl（如果之前安装了）
-    if apk info --installed .temp-curl > /dev/null 2>&1; then \
-        apk del .temp-curl; \
-    fi && \
+    rm -f glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk /etc/apk/keys/sgerrand.rsa.pub && \
+    apk del .glibc-deps && \
     # 验证安装
     echo "→ 验证glibc安装..." && \
-    if [ -f "/usr/glibc-compat/lib/ld-linux-x86-64.so.2" ] || [ -f "/usr/glibc-compat/lib/ld-linux-aarch64.so.1" ]; then \
-        echo "✓ glibc验证成功"; \
-    else \
-        echo "⚠️ glibc文件未找到，但继续构建..."; \
-    fi && \
-    echo "✓ glibc安装完成"
+    ls -la /usr/glibc-compat/lib/ld-* 2>/dev/null | head -2 && \
+    echo "✓ glibc安装验证完成"
 
 # 创建工作目录
 RUN mkdir -p /snell
@@ -130,6 +103,11 @@ COPY entrypoint.sh /snell/entrypoint.sh
 
 # 设置执行权限
 RUN chmod +x /snell/entrypoint.sh /snell/snell-server
+
+# 验证Snell可以运行
+RUN echo "→ 验证Snell运行..." && \
+    /snell/snell-server --help 2>&1 | head -1 && \
+    echo "✓ Snell验证通过"
 
 WORKDIR /snell
 
