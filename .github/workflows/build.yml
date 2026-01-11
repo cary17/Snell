@@ -22,7 +22,7 @@ on:
 
 env:
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-  GHCR_USERNAME: ${{ github.repository_owner }}
+  GHCR_USERNAME: ${{ github.snell-dockersitory_cary17 }}
 
 jobs:
   check-version:
@@ -75,7 +75,7 @@ jobs:
           fi
           
           # 检查 GHCR 是否已存在该版本
-          if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:${VERSION} >/dev/null 2>&1; then
+          if docker manifest inspect ghcr.io/${{ github.snell-dockersitory_cary17 }}/snell:${VERSION} >/dev/null 2>&1; then
             echo "→ 版本 ${VERSION} 已存在于 GHCR"
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
@@ -114,7 +114,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
+          username: ${{ github.snell-dockersitory_cary17 }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 准备构建参数
@@ -133,7 +133,7 @@ jobs:
           echo "debian_version=$DEBIAN_VERSION" >> $GITHUB_OUTPUT
           
           # 构建镜像标签
-          GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
+          GHCR_IMAGE="ghcr.io/${{ github.snell-dockersitory_cary17 }}/snell"
           
           # 默认标签：version 和 latest
           TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
@@ -180,10 +180,10 @@ jobs:
             org.opencontainers.image.version=${{ steps.prep.outputs.version }}
             org.opencontainers.image.created=${{ steps.prep.outputs.build_date }}
             org.opencontainers.image.revision=${{ steps.prep.outputs.vcs_ref }}
-            org.opencontainers.image.url=https://github.com/${{ github.repository }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#readme
-            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            org.opencontainers.image.url=https://github.com/${{ github.snell-dockersitory }}
+            org.opencontainers.image.source=https://github.com/${{ github.snell-dockersitory }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.snell-dockersitory }}#readme
+            org.opencontainers.image.vendor=${{ github.snell-dockersitory_cary17 }}
             org.opencontainers.image.licenses=MIT
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -203,23 +203,3 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.prep.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-```
-
-## 使用说明
-
-1. **替换占位符**：
-   - 将所有 `OWNER` 替换为你的 GitHub 用户名
-   - 将所有 `REPO` 替换为你的仓库名
-
-2. **文件结构**：
-```
-   your-repo/
-   ├── .dockerignore          # 新增
-   ├── .github/
-   │   └── workflows/
-   │       └── build.yml      # 更新
-   ├── Dockerfile             # 更新
-   ├── entrypoint.sh
-   ├── README.md              # 完整文档（不会显示在 GHCR）
-   ├── README.ghcr.md         # 新增（GHCR 简介）
-   └── Version/
