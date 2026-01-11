@@ -58,27 +58,32 @@ LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
 # 安装运行时依赖和 glibc
 RUN apk add --no-cache ca-certificates tini libstdc++ && \
+    # 获取最新稳定版glibc信息
+    echo "→ 获取最新glibc版本信息..." && \
     case "${TARGETPLATFORM}" in \
         linux/amd64) \
-            GLIBC_VER="2.36-r1"; \
-            GLIBC_ARCH="x86_64"; \
+            GLIBC_ARCH="x86_64" \
             ;; \
         linux/arm64) \
-            GLIBC_VER="2.35-r1"; \
-            GLIBC_ARCH="aarch64"; \
+            GLIBC_ARCH="aarch64" \
             ;; \
         *) \
-            echo "❌ Unsupported platform: ${TARGETPLATFORM}"; \
-            exit 1; \
+            echo "❌ Unsupported platform: ${TARGETPLATFORM}" \
+            exit 1 \
             ;; \
     esac && \
-    echo "→ Installing glibc ${GLIBC_VER} for ${GLIBC_ARCH}..." && \
-    wget -q -O /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub && \
-    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-${GLIBC_VER}.apk && \
-    wget -q https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-bin-${GLIBC_VER}.apk && \
-    apk add --no-cache --force-overwrite glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk && \
+    # 获取最新的glibc版本
+    LATEST_RELEASE=$(curl -s https://api.github.com/repos/sgerrand/alpine-pkg-glibc/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
+    echo "→ 安装glibc ${LATEST_RELEASE} for ${GLIBC_ARCH}..." && \
+    # 下载签名密钥
+    curl -fsSL -o /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub && \
+    # 下载glibc包
+    curl -fsSL -o glibc-${LATEST_RELEASE}.apk https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${LATEST_RELEASE}/glibc-${LATEST_RELEASE}.apk && \
+    curl -fsSL -o glibc-bin-${LATEST_RELEASE}.apk https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${LATEST_RELEASE}/glibc-bin-${LATEST_RELEASE}.apk && \
+    # 安装并清理
+    apk add --no-cache --force-overwrite glibc-${LATEST_RELEASE}.apk glibc-bin-${LATEST_RELEASE}.apk && \
     rm -f glibc-*.apk /etc/apk/keys/sgerrand.rsa.pub && \
-    echo "✓ glibc installed successfully"
+    echo "✓ glibc安装成功"
 
 # 创建工作目录
 RUN mkdir -p /snell
