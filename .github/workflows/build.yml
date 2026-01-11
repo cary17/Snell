@@ -11,11 +11,11 @@ on:
         required: false
         type: string
       debian_version:
-        description: 'Debian版本号（如：bookworm, trixie，留空使用 latest）'
+        description: 'Debian版本号（如：bookworm, stable, testing，留空使用 stable）'
         required: false
         type: string
       alpine_version:
-        description: 'Alpine-glibc版本号（如：alpine-3.19, edge，留空使用 edge）'
+        description: 'Alpine版本号（如：3.19, 3.20, latest，留空使用 latest）'
         required: false
         type: string
       force:
@@ -133,13 +133,13 @@ jobs:
             if [ -n "${{ inputs.debian_version }}" ]; then
               BASE_VERSION="${{ inputs.debian_version }}"
             else
-              BASE_VERSION="latest"
+              BASE_VERSION="stable"
             fi
           else
             if [ -n "${{ inputs.alpine_version }}" ]; then
               BASE_VERSION="${{ inputs.alpine_version }}"
             else
-              BASE_VERSION="edge"
+              BASE_VERSION="latest"
             fi
           fi
           
@@ -186,13 +186,12 @@ jobs:
         with:
           context: .
           file: ${{ matrix.base == 'alpine' && 'Dockerfile.alpine' || 'Dockerfile' }}
-          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
+          platforms: ${{ matrix.base == 'alpine' && 'linux/amd64,linux/arm64' || 'linux/amd64,linux/386,linux/arm64,linux/arm/v7' }}
           push: true
           tags: ${{ steps.prep.outputs.tags }}
           build-args: |
             SNELL_VERSION=${{ steps.prep.outputs.version }}
             BASE_VERSION=${{ steps.prep.outputs.base_version }}
-            TARGETARCH=$TARGETARCH
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
