@@ -46,8 +46,9 @@ RUN set -ex && \
 # 最终运行镜像
 FROM alpine:${BASE_VERSION}
 
-ARG SNELL_VERSION
+# 重要：在新的构建阶段必须重新声明 ARG
 ARG TARGETARCH
+ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
@@ -99,7 +100,6 @@ COPY entrypoint.sh /snell/entrypoint.sh
 RUN chmod +x /snell/entrypoint.sh /snell/snell-server
 
 WORKDIR /snell
-
 
 # 使用 tini 作为 init 进程来正确处理信号
 ENTRYPOINT ["/sbin/tini", "--", "/snell/entrypoint.sh"]
