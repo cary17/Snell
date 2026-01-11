@@ -49,3 +49,17 @@ services:
 - `latest` - Latest version
 - `vX.Y.Z` - Specific version
 
+
+## 📦 镜像仓库
+
+### GHCR (推荐)
+```bash
+ghcr.io/cary17/snell:latest
+ghcr.io/cary17/snell:5.0.1
+```
+
+### Docker Hub
+```bash
+cary17/snell:latest
+cary17e/snell:5.0.1
+```
