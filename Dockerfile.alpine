@@ -56,10 +56,11 @@ LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-doc
 LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装运行时依赖和 glibc
+# 安装运行时依赖，包括curl（临时安装）
 RUN apk add --no-cache ca-certificates tini libstdc++ && \
-    # 获取最新稳定版glibc信息
-    echo "→ 获取最新glibc版本信息..." && \
+    # 安装curl用于获取glibc
+    echo "→ 安装curl用于获取glibc..." && \
+    apk add --no-cache --virtual .glibc-deps curl && \
     case "${TARGETPLATFORM}" in \
         linux/amd64) \
             GLIBC_ARCH="x86_64" \
@@ -68,21 +69,25 @@ RUN apk add --no-cache ca-certificates tini libstdc++ && \
             GLIBC_ARCH="aarch64" \
             ;; \
         *) \
-            echo "❌ Unsupported platform: ${TARGETPLATFORM}" \
+            echo "❌ Unsupported platform: ${TARGETPLATFORM}" && \
             exit 1 \
             ;; \
     esac && \
     # 获取最新的glibc版本
-    LATEST_RELEASE=$(curl -s https://api.github.com/repos/sgerrand/alpine-pkg-glibc/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
+    echo "→ 获取最新glibc版本信息..." && \
+    LATEST_RELEASE=$(curl -fsSL https://api.github.com/repos/sgerrand/alpine-pkg-glibc/releases/latest | grep '"tag_name"' | cut -d'"' -f4) && \
     echo "→ 安装glibc ${LATEST_RELEASE} for ${GLIBC_ARCH}..." && \
     # 下载签名密钥
     curl -fsSL -o /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub && \
     # 下载glibc包
-    curl -fsSL -o glibc-${LATEST_RELEASE}.apk https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${LATEST_RELEASE}/glibc-${LATEST_RELEASE}.apk && \
-    curl -fsSL -o glibc-bin-${LATEST_RELEASE}.apk https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${LATEST_RELEASE}/glibc-bin-${LATEST_RELEASE}.apk && \
-    # 安装并清理
+    curl -fsSL -O https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${LATEST_RELEASE}/glibc-${LATEST_RELEASE}.apk && \
+    curl -fsSL -O https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${LATEST_RELEASE}/glibc-bin-${LATEST_RELEASE}.apk && \
+    # 安装glibc
     apk add --no-cache --force-overwrite glibc-${LATEST_RELEASE}.apk glibc-bin-${LATEST_RELEASE}.apk && \
+    # 清理临时文件
     rm -f glibc-*.apk /etc/apk/keys/sgerrand.rsa.pub && \
+    # 移除临时curl安装
+    apk del .glibc-deps && \
     echo "✓ glibc安装成功"
 
 # 创建工作目录
