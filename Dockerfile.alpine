@@ -1,5 +1,5 @@
-ARG BASE_VERSION=3.21
-FROM --platform=$BUILDPLATFORM alpine:${BASE_VERSION} AS builder
+ARG BASE_VERSION=edge
+FROM --platform=$BUILDPLATFORM frolvlad/alpine-glibc:${BASE_VERSION} AS builder
 
 ARG TARGETPLATFORM
 ARG SNELL_VERSION
@@ -48,59 +48,17 @@ RUN set -ex && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
-# 最终运行镜像
-FROM alpine:${BASE_VERSION}
+# 最终运行镜像 - 使用带 glibc 的 Alpine 基础镜像
+FROM frolvlad/alpine-glibc:${BASE_VERSION}
 
-ARG TARGETPLATFORM
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
-LABEL org.opencontainers.image.description="Snell Server (Alpine)"
+LABEL org.opencontainers.image.description="Snell Server (Alpine with glibc)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 安装基础依赖和 curl
-RUN apk add --no-cache ca-certificates curl tini gcompat libstdc++
-
-# 安装 glibc（针对不同架构）
-RUN set -ex && \
-    echo "→ Target Platform: ${TARGETPLATFORM:-unknown}" && \
-    case "${TARGETPLATFORM}" in \
-        linux/amd64) \
-            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-2.36-r1.apk"; \
-            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86_64/glibc-bin-2.36-r1.apk"; \
-            ;; \
-        linux/arm64) \
-            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-2.35-r1.apk"; \
-            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/aarch64/glibc-bin-2.35-r1.apk"; \
-            ;; \
-        linux/386) \
-            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86/glibc-2.36-r1.apk"; \
-            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/x86/glibc-bin-2.36-r1.apk"; \
-            ;; \
-        linux/arm/v7) \
-            GLIBC_URL="https://repo.tlle.eu.org/alpine/v3.20/main/armv7/glibc-2.35-r1.apk"; \
-            GLIBC_BIN_URL="https://repo.tlle.eu.org/alpine/v3.20/main/armv7/glibc-bin-2.35-r1.apk"; \
-            ;; \
-        *) \
-            echo "❌ Unsupported platform: ${TARGETPLATFORM}"; \
-            exit 1; \
-            ;; \
-    esac && \
-    echo "→ Downloading glibc from: ${GLIBC_URL}" && \
-    if ! curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/glibc.apk "$GLIBC_URL"; then \
-        echo "❌ glibc download failed"; \
-        exit 1; \
-    fi && \
-    echo "→ Downloading glibc-bin from: ${GLIBC_BIN_URL}" && \
-    if ! curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/glibc-bin.apk "$GLIBC_BIN_URL"; then \
-        echo "❌ glibc-bin download failed"; \
-        exit 1; \
-    fi && \
-    echo "→ Installing glibc packages..." && \
-    apk add --no-cache --allow-untrusted --force-overwrite /tmp/glibc.apk /tmp/glibc-bin.apk && \
-    rm -f /tmp/*.apk && \
-    apk del curl && \
-    echo "✓ glibc installed successfully"
+# 安装运行时依赖
+RUN apk add --no-cache ca-certificates tini libstdc++
 
 # 创建工作目录
 RUN mkdir -p /snell
