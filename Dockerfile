@@ -51,6 +51,7 @@ RUN set -ex && \
 # 最终运行镜像
 FROM debian:${BASE_VERSION}-slim
 
+# 重要：在新的构建阶段必须重新声明 ARG
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
@@ -76,6 +77,7 @@ RUN chmod +x /snell/entrypoint.sh /snell/snell-server
 
 WORKDIR /snell
 
+EXPOSE 20000
 
 # 使用 tini 作为 init 进程来正确处理信号
 ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
