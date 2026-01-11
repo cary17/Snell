@@ -46,24 +46,59 @@ RUN set -ex && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
-# 最终运行镜像 - 使用自带glibc的Alpine镜像
-FROM frolvlad/alpine-glibc:alpine-3.19_glibc-2.38
+# 最终运行镜像
+FROM alpine:${BASE_VERSION}
 
 ARG TARGETPLATFORM
 ARG SNELL_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
-LABEL org.opencontainers.image.description="Snell Server (Alpine with glibc)"
+LABEL org.opencontainers.image.description="Snell Server (Alpine)"
 LABEL org.opencontainers.image.version="${SNELL_VERSION}"
 
-# 验证glibc已安装
-RUN echo "→ 验证glibc安装..." && \
-    /usr/glibc-compat/bin/ldd --version 2>&1 | head -1 && \
-    echo "✓ glibc已预安装"
-
-# 安装最小化运行时依赖（基础镜像已包含ca-certificates）
-RUN apk add --no-cache tini libstdc++ && \
-    echo "✓ 运行时依赖安装完成"
+# 安装运行时依赖和glibc - 使用已验证的方案
+RUN apk add --no-cache ca-certificates tini libstdc++ && \
+    echo "→ 安装glibc（使用sgerrand/alpine-pkg-glibc）..." && \
+    # 根据架构选择版本
+    case "${TARGETPLATFORM}" in \
+        linux/amd64) \
+            GLIBC_VER="2.36-r1" \
+            ;; \
+        linux/arm64) \
+            GLIBC_VER="2.35-r1" \
+            ;; \
+        *) \
+            echo "❌ Unsupported platform: ${TARGETPLATFORM}" && \
+            exit 1 \
+            ;; \
+    esac && \
+    echo "→ 使用glibc版本: ${GLIBC_VER}" && \
+    # 安装wget用于下载
+    apk add --no-cache --virtual .glibc-deps wget && \
+    # 下载签名密钥
+    echo "→ 下载glibc签名密钥..." && \
+    wget -q -O /etc/apk/keys/sgerrand.rsa.pub https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub && \
+    # 下载glibc包
+    echo "→ 下载glibc包..." && \
+    GLIBC_BASE_URL="https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}" && \
+    wget -q ${GLIBC_BASE_URL}/glibc-${GLIBC_VER}.apk && \
+    wget -q ${GLIBC_BASE_URL}/glibc-bin-${GLIBC_VER}.apk && \
+    # 安装glibc
+    echo "→ 安装glibc..." && \
+    apk add --no-cache --force-overwrite glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk && \
+    echo "✓ glibc安装成功" && \
+    # 清理
+    echo "→ 清理临时文件..." && \
+    rm -f glibc-${GLIBC_VER}.apk glibc-bin-${GLIBC_VER}.apk /etc/apk/keys/sgerrand.rsa.pub && \
+    apk del .glibc-deps && \
+    # 验证安装
+    echo "→ 验证glibc安装..." && \
+    if [ -f "/usr/glibc-compat/lib/ld-linux-x86-64.so.2" ] || [ -f "/usr/glibc-compat/lib/ld-linux-aarch64.so.1" ]; then \
+        echo "✓ glibc核心库验证成功"; \
+    else \
+        echo "❌ glibc安装验证失败" && \
+        exit 1; \
+    fi
 
 # 创建工作目录
 RUN mkdir -p /snell
@@ -72,17 +107,19 @@ RUN mkdir -p /snell
 COPY --from=builder /tmp/snell/snell-server /snell/snell-server
 COPY entrypoint.sh /snell/entrypoint.sh
 
-# 设置执行权限并验证
-RUN chmod +x /snell/entrypoint.sh /snell/snell-server && \
-    echo "→ 验证Snell运行..." && \
+# 设置执行权限
+RUN chmod +x /snell/entrypoint.sh /snell/snell-server
+
+# 必须验证Snell能运行
+RUN echo "→ 关键验证：测试Snell运行..." && \
     if /snell/snell-server --version 2>/dev/null || /snell/snell-server --help 2>&1 | head -1 >/dev/null; then \
-        echo "✓ Snell验证成功"; \
+        echo "✓ Snell验证成功，可以正常运行"; \
     else \
-        echo "❌ Snell无法运行！" && \
-        echo "调试信息:" && \
-        echo "文件: $(file /snell/snell-server 2>/dev/null || echo '未知')" && \
-        echo "glibc版本: $(/usr/glibc-compat/bin/ldd --version 2>&1 | head -1)" && \
-        echo "依赖: $(ldd /snell/snell-server 2>&1 || echo 'ldd失败')" && \
+        echo "❌ 严重错误：Snell无法运行！" && \
+        echo "调试信息：" && \
+        echo "文件类型: $(file /snell/snell-server 2>/dev/null || echo '无法识别')" && \
+        echo "依赖检查: $(ldd /snell/snell-server 2>&1 | head -5 || echo 'ldd失败')" && \
+        echo "glibc版本: $(/usr/glibc-compat/bin/ldd --version 2>&1 | head -1 || echo '无法获取')" && \
         exit 1; \
     fi
 
