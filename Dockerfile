@@ -53,21 +53,33 @@ RUN set -ex && \
     chmod +x /tmp/snell/snell-server && \
     echo "✓ Snell Server 准备完成"
 
-# 最终运行镜像
+# 最终运行镜像 - 使用最小基础镜像
 FROM debian:${BASE_VERSION}-slim
 
 ARG SNELL_VERSION
+ARG BUILD_DATE
+ARG VCS_REF
 
-LABEL org.opencontainers.image.source="https://github.com/yourusername/snell-docker"
-LABEL org.opencontainers.image.description="Snell Server"
-LABEL org.opencontainers.image.version="${SNELL_VERSION}"
+# OCI 标准标签（这些标签不会增加镜像体积，只是元数据）
+LABEL org.opencontainers.image.title="Snell Server" \
+      org.opencontainers.image.description="Multi-architecture Snell Server - Supports amd64, 386, arm64, armv7" \
+      org.opencontainers.image.version="${SNELL_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.url="https://github.com/OWNER/REPO" \
+      org.opencontainers.image.source="https://github.com/OWNER/REPO" \
+      org.opencontainers.image.documentation="https://github.com/OWNER/REPO#readme" \
+      org.opencontainers.image.vendor="OWNER" \
+      org.opencontainers.image.licenses="MIT" \
+      maintainer="OWNER"
 
-# 安装运行时必需的依赖（包括 tini 用于信号处理）
+# 只安装运行时必需的最小依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     tini && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/cache/apt/archives/*
 
 # 创建工作目录
 RUN mkdir -p /snell
