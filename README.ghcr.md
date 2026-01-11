@@ -13,14 +13,14 @@ docker run -d \
   --restart unless-stopped \
   -p 20000:20000 \
   -e PSK=your_password \
-  ghcr.io/OWNER/snell:latest
+  ghcr.io/cary17/snell:latest
 ```
 
 ## Docker Compose
 ```yaml
 services:
   snell:
-    image: ghcr.io/OWNER/snell:latest
+    image: ghcr.io/cary17/snell:latest
     container_name: snell
     restart: unless-stopped
     ports:
