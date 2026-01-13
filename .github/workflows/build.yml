@@ -6,12 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell版本（如 5.0.1 或 v5.0.1，留空自动）'
+        description: 'Snell版本 (如 4.0.1, 留空自动获取最新)'
         required: false
         type: string
       debian_version:
-        description: 'Debian 版本'
+        description: 'Debian 标签 (默认 stable-slim)'
         required: false
+        default: 'stable-slim'
         type: string
       force:
         description: '强制构建'
@@ -19,94 +20,68 @@ on:
         type: boolean
         default: false
 
-env:
-  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
-
 jobs:
   check-version:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       should_build: ${{ steps.decide.outputs.should_build }}
+      debian_tag: ${{ steps.debian.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # -------- 官方版本 --------
-      - name: 获取 Snell 官方版本
+      - name: 确定 Debian 版本
+        id: debian
+        run: echo "tag=${{ github.event.inputs.debian_version || 'stable-slim' }}" >> $GITHUB_OUTPUT
+
+      - name: 获取 Snell 官方版本 (带重试机制)
         id: version
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            INPUT="${{ inputs.version }}"
-            VERSION="v${INPUT#v}"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            exit 0
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            V_INPUT="${{ github.event.inputs.version }}"
+            echo "version=v${V_INPUT#v}" >> $GITHUB_OUTPUT
+          else
+            # 重试 3 次获取版本
+            for i in {1..3}; do
+              VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
+                | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' \
+                | sort -V | tail -n1)
+              [ -n "$VERSION" ] && break || sleep 5
+            done
+            if [ -z "$VERSION" ]; then echo "获取官方版本失败" && exit 1; fi
+            echo "version=v$VERSION" >> $GITHUB_OUTPUT
           fi
 
-          VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
-            | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' \
-            | sort -Vru | head -n1)
-
-          [ -z "$VERSION" ] && exit 1
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-
-      # -------- GHCR 版本（修复重点）--------
-      - name: 获取 GHCR 最新版本
+      - name: 获取 GHCR 现有最新版本
         id: ghcr
         run: |
-          set -e
-          GHCR_VERSION="v0.0.0"
-
-          echo "→ 获取 GHCR token..."
-          TOKEN=$(curl -fsSL \
-            "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" \
-            | jq -r '.token // empty')
-
-          if [ -z "$TOKEN" ]; then
-            echo "⚠️ GHCR token 获取失败"
-            echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
-            exit 0
+          TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" | jq -r '.token // empty')
+          if [ -n "$TOKEN" ]; then
+            GHCR_V=$(curl -fsSL -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list \
+              | jq -r '.tags[]?' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || echo "v0.0.0")
+          else
+            GHCR_V="v0.0.0"
           fi
+          echo "ghcr_version=$GHCR_V" >> $GITHUB_OUTPUT
 
-          echo "→ 拉取 GHCR tags..."
-          TAGS=$(curl -fsSL \
-            -H "Authorization: Bearer $TOKEN" \
-            https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list \
-            | jq -r '.tags[]?' || true)
-
-          if [ -n "$TAGS" ]; then
-            GHCR_VERSION=$(echo "$TAGS" \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -Vru | head -n1 || echo v0.0.0)
-          fi
-
-          echo "✓ GHCR 当前版本: $GHCR_VERSION"
-          echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
-
-      # -------- 是否构建 --------
       - name: 判断是否需要构建
         id: decide
         run: |
-          OFF="${{ steps.version.outputs.version }}"
-          GHCR="${{ steps.ghcr.outputs.ghcr_version }}"
-
-          if [ "${{ inputs.force }}" = "true" ]; then
+          OFFICIAL="${{ steps.version.outputs.version }}"
+          CURRENT="${{ steps.ghcr.outputs.ghcr_version }}"
+          echo "官方版本: $OFFICIAL, 当前版本: $CURRENT"
+          
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          if [ "${GHCR#v}" = "0.0.0" ]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          if [ "$(printf '%s\n%s\n' "${OFF#v}" "${GHCR#v}" | sort -V | tail -n1)" = "${OFF#v}" ] \
-             && [ "$OFF" != "$GHCR" ]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
+          elif [ "$OFFICIAL" != "$CURRENT" ]; then
+            # 只有当官方版本高于当前版本时才构建
+            HIGHEST=$(printf '%s\n%s' "$OFFICIAL" "$CURRENT" | sort -V | tail -n1)
+            if [ "$HIGHEST" == "$OFFICIAL" ]; then
+              echo "should_build=true" >> $GITHUB_OUTPUT
+            else
+              echo "should_build=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
@@ -118,23 +93,17 @@ jobs:
     permissions:
       contents: read
       packages: write
-
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/login-action@v3
-        if: env.DOCKER_HUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKER_HUB_USERNAME }}
-          password: ${{ env.DOCKER_HUB_TOKEN }}
 
       - name: Build & Push
         uses: docker/build-push-action@v5
@@ -142,6 +111,9 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
+          build-args: |
+            SNELL_VERSION=${{ needs.check-version.outputs.version }}
+            BASE_TAG=${{ needs.check-version.outputs.debian_tag }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/snell:latest
