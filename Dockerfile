@@ -5,10 +5,10 @@ ARG BASE_VERSION=stable
 # =========================
 FROM --platform=$BUILDPLATFORM debian:${BASE_VERSION}-slim AS builder
 
-ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG TARGETVARIANT
 ARG SNELL_VERSION
 
-# 构建期最小依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
@@ -17,18 +17,21 @@ RUN apt-get update && \
 
 RUN mkdir -p /tmp/snell
 
-# 本地兜底版本
 COPY Version /tmp/Version
 
-# 下载 Snell（统一官方包名）
 RUN set -ex && \
-    echo "→ Target Platform: ${TARGETPLATFORM}" && \
-    case "${TARGETPLATFORM}" in \
-        linux/amd64)   ARCH="amd64" ;; \
-        linux/386)     ARCH="i386" ;; \
-        linux/arm64)   ARCH="aarch64" ;; \
-        linux/arm/v7*) ARCH="armv7l" ;; \
-        *) echo "❌ Unsupported platform: ${TARGETPLATFORM}" && exit 1 ;; \
+    echo "→ TARGETARCH=${TARGETARCH}, TARGETVARIANT=${TARGETVARIANT}" && \
+    case "${TARGETARCH}" in \
+        amd64) ARCH="amd64" ;; \
+        386)   ARCH="i386" ;; \
+        arm64) ARCH="aarch64" ;; \
+        arm) \
+          case "${TARGETVARIANT}" in \
+            v7) ARCH="armv7l" ;; \
+            *) echo "❌ Unsupported ARM variant: ${TARGETVARIANT}" && exit 1 ;; \
+          esac \
+          ;; \
+        *) echo "❌ Unsupported arch: ${TARGETARCH}" && exit 1 ;; \
     esac && \
     VERSION="${SNELL_VERSION#v}" && \
     VERSION_WITH_V="v${VERSION}" && \
@@ -41,10 +44,9 @@ RUN set -ex && \
     else \
         echo "⚠️ 官方下载失败，尝试使用仓库文件"; \
         if [ -f "${REPO_FILE}" ]; then \
-            echo "✓ 使用仓库文件: ${REPO_FILE}"; \
             cp "${REPO_FILE}" /tmp/snell.zip; \
         else \
-            echo "❌ 构建失败：官方下载失败且仓库中无备份文件"; \
+            echo "❌ 构建失败：无可用 Snell 安装包"; \
             exit 1; \
         fi; \
     fi && \
@@ -72,7 +74,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     tini && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/cache/apt/archives/*
+    rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /snell
 
@@ -82,6 +84,5 @@ COPY entrypoint.sh /snell/entrypoint.sh
 RUN chmod +x /snell/snell-server /snell/entrypoint.sh
 
 WORKDIR /snell
-EXPOSE 20000
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
