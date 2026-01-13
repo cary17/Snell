@@ -1,82 +1,54 @@
-ARG BASE_VERSION=stable
-
-# =========================
-# Builder
-# =========================
-FROM --platform=$TARGETPLATFORM debian:${BASE_VERSION}-slim AS builder
+# 可选基础镜像版本
+ARG BASE_TAG=stable-slim
+FROM --platform=$TARGETPLATFORM debian:${BASE_TAG} AS builder
 
 ARG TARGETARCH
 ARG SNELL_VERSION
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# 1. 安装构建工具
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    unzip && \
-    rm -rf /var/lib/apt/lists/*
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /tmp/snell
+# 2. 复制本地备份文件
 COPY Version /tmp/Version
 
+# 3. 下载并准备二进制文件
 RUN set -ex && \
-    echo "→ TARGETARCH=${TARGETARCH}" && \
     case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
         386)   ARCH="i386" ;; \
         arm64) ARCH="aarch64" ;; \
         arm)   ARCH="armv7l" ;; \
-        *) echo "❌ Unsupported arch: ${TARGETARCH}" && exit 1 ;; \
+        *) exit 1 ;; \
     esac && \
-    VERSION="${SNELL_VERSION#v}" && \
-    VERSION_WITH_V="v${VERSION}" && \
-    echo "→ Snell Version: ${VERSION_WITH_V}, Arch: ${ARCH}" && \
-    DOWNLOAD_URL="https://dl.nssurge.com/snell/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
-    REPO_FILE="/tmp/Version/${VERSION_WITH_V}/snell-server-${VERSION_WITH_V}-linux-${ARCH}.zip" && \
-    echo "→ 尝试官方下载: ${DOWNLOAD_URL}" && \
-    if curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/snell.zip "${DOWNLOAD_URL}"; then \
-        echo "✓ 官方下载成功"; \
-    else \
-        echo "⚠️ 官方下载失败，尝试使用仓库文件"; \
-        if [ -f "${REPO_FILE}" ]; then \
-            cp "${REPO_FILE}" /tmp/snell.zip; \
-        else \
-            echo "❌ 构建失败：无可用 Snell 安装包"; \
-            exit 1; \
-        fi; \
+    V_NUM="${SNELL_VERSION#v}" && \
+    FILENAME="snell-server-v${V_NUM}-linux-${ARCH}.zip" && \
+    \
+    if ! curl -fsSL -o /tmp/s.zip "https://dl.nssurge.com/snell/${FILENAME}"; then \
+        echo "官方下载失败，尝试使用本地备份..." && \
+        cp "/tmp/Version/v${V_NUM}/${FILENAME}" /tmp/s.zip; \
     fi && \
-    unzip -q /tmp/snell.zip -d /tmp/snell && \
-    chmod +x /tmp/snell/snell-server && \
-    rm -f /tmp/snell.zip
+    unzip -q /tmp/s.zip -d /tmp/ && \
+    chmod +x /tmp/snell-server
 
-# =========================
-# Runtime
-# =========================
-FROM debian:${BASE_VERSION}-slim
+# --- 运行时环境 ---
+FROM debian:${BASE_TAG}
 
-ARG SNELL_VERSION
-ARG BUILD_DATE
-ARG VCS_REF
-
-LABEL org.opencontainers.image.title="Snell Server" \
-      org.opencontainers.image.version="${SNELL_VERSION}" \
-      org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.source="https://github.com/cary17/snell-docker" \
-      org.opencontainers.image.licenses="MIT"
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# 只保留运行必需的 CA 证书，安装后立即清理以最小化体积
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    tini && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /snell
-
-COPY --from=builder /tmp/snell/snell-server /snell/snell-server
-COPY entrypoint.sh /snell/entrypoint.sh
-
-RUN chmod +x /snell/snell-server /snell/entrypoint.sh
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
 WORKDIR /snell
+
+# 拷贝二进制文件和 entrypoint
+COPY --from=builder /tmp/snell-server .
+COPY entrypoint.sh .
+RUN chmod +x snell-server entrypoint.sh
+
 EXPOSE 20000
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
+# entrypoint.sh 内部使用 exec 确保信号优雅处理 (SIGTERM/SIGINT)
+ENTRYPOINT ["./entrypoint.sh"]
