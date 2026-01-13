@@ -15,20 +15,19 @@ RUN apt-get update && \
     unzip && \
     rm -rf /var/lib/apt/lists/*
 
-# 工作目录
 RUN mkdir -p /tmp/snell
 
-# 复制仓库 Version 目录（作为官方下载失败的兜底）
+# 本地兜底版本
 COPY Version /tmp/Version
 
-# 下载或使用仓库中的 snell-server（统一官方包名）
+# 下载 Snell（统一官方包名）
 RUN set -ex && \
     echo "→ Target Platform: ${TARGETPLATFORM}" && \
     case "${TARGETPLATFORM}" in \
-        linux/amd64)  ARCH="amd64" ;; \
-        linux/386)    ARCH="i386" ;; \
-        linux/arm64)  ARCH="aarch64" ;; \
-        linux/arm/v7) ARCH="armv7l" ;; \
+        linux/amd64)   ARCH="amd64" ;; \
+        linux/386)     ARCH="i386" ;; \
+        linux/arm64)   ARCH="aarch64" ;; \
+        linux/arm/v7*) ARCH="armv7l" ;; \
         *) echo "❌ Unsupported platform: ${TARGETPLATFORM}" && exit 1 ;; \
     esac && \
     VERSION="${SNELL_VERSION#v}" && \
@@ -51,8 +50,7 @@ RUN set -ex && \
     fi && \
     unzip -q /tmp/snell.zip -d /tmp/snell && \
     chmod +x /tmp/snell/snell-server && \
-    rm -f /tmp/snell.zip && \
-    echo "✓ Snell Server 准备完成"
+    rm -f /tmp/snell.zip
 
 # =========================
 # Runtime
@@ -63,33 +61,27 @@ ARG SNELL_VERSION
 ARG BUILD_DATE
 ARG VCS_REF
 
-# OCI 标签（仅元数据，不影响体积）
 LABEL org.opencontainers.image.title="Snell Server" \
-      org.opencontainers.image.description="Multi-architecture Snell Server (amd64, 386, arm64, armv7)" \
       org.opencontainers.image.version="${SNELL_VERSION}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="https://github.com/cary17/snell-docker" \
       org.opencontainers.image.licenses="MIT"
 
-# 运行期最小依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     tini && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/cache/apt/archives/*
 
-# 工作目录
 RUN mkdir -p /snell
 
-# 拷贝构建产物
 COPY --from=builder /tmp/snell/snell-server /snell/snell-server
 COPY entrypoint.sh /snell/entrypoint.sh
 
-# 权限
 RUN chmod +x /snell/snell-server /snell/entrypoint.sh
 
 WORKDIR /snell
-
+EXPOSE 20000
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
