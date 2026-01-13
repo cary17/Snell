@@ -35,5 +35,5 @@ COPY --from=builder /tmp/snell-server .
 COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh
 
-EXPOSE 20000
-ENTRYPOINT ["./entrypoint.sh"]
+# 使用 exec 形式的 ENTRYPOINT 确保信号传递
+ENTRYPOINT ["/snell/entrypoint.sh"]
