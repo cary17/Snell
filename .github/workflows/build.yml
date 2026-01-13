@@ -99,7 +99,6 @@ jobs:
             local max_retries=3
             local retry_delay=5
             local attempt=1
-            local repo_name="${GITHUB_REPOSITORY##*/}"
             
             while [ $attempt -le $max_retries ]; do
               echo "→ 尝试获取 GHCR 版本 (第 $attempt 次)..." >&2
@@ -110,14 +109,14 @@ jobs:
                 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
-                "https://api.github.com/users/${{ github.repository_owner }}/packages/container/${repo_name}/versions" 2>/dev/null | \
+                "https://api.github.com/users/${{ github.repository_owner }}/packages/container/snell/versions" 2>/dev/null | \
                 grep -oP '"name":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | \
                 sort -Vru | head -n 1)
               
               # 如果方法1失败，尝试方法2: 直接检查镜像标签
               if [ -z "$GHCR_VERSION" ]; then
                 echo "→ 尝试备用方法..." >&2
-                GHCR_VERSION=$(docker manifest inspect ghcr.io/${{ github.repository_owner }}/${repo_name}:latest 2>/dev/null | \
+                GHCR_VERSION=$(docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:latest 2>/dev/null | \
                   grep -oP '"org.opencontainers.image.version":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
               fi
               
@@ -231,13 +230,12 @@ jobs:
         if: env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
         continue-on-error: true
         run: |
-          REPO_NAME="${GITHUB_REPOSITORY##*/}"
-          echo "→ 检查 Docker Hub 仓库: ${REPO_NAME}"
+          echo "→ 检查 Docker Hub 仓库: snell"
           
           # 检查仓库是否存在
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
-            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/${REPO_NAME}/")
+            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/snell/")
           
           if [ "$RESPONSE" = "404" ]; then
             echo "→ 仓库不存在，尝试创建..."
@@ -246,7 +244,7 @@ jobs:
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
               -d "{
-                \"name\": \"${REPO_NAME}\",
+                \"name\": \"snell\",
                 \"description\": \"Multi-architecture Snell Server - Supports amd64, 386, arm64, armv7\",
                 \"is_private\": false
               }" \
@@ -266,7 +264,6 @@ jobs:
         id: prep
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          REPO_NAME="${GITHUB_REPOSITORY##*/}"
           
           if [ -n "${{ inputs.debian_version }}" ]; then
             DEBIAN_VERSION="${{ inputs.debian_version }}"
@@ -277,11 +274,12 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "debian_version=$DEBIAN_VERSION" >> $GITHUB_OUTPUT
           
-          GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/${REPO_NAME}"
+          # 镜像名固定为 snell（精简命名）
+          GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
           TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
           
           if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
-            DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/${REPO_NAME}"
+            DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
             TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
           fi
           
@@ -293,6 +291,7 @@ jobs:
           echo "📦 构建信息:"
           echo "  基础镜像: debian:$DEBIAN_VERSION"
           echo "  Snell 版本: $VERSION"
+          echo "  镜像名称: snell"
           echo "  标签: $TAGS"
 
       - name: 创建空 Version 目录
@@ -332,7 +331,6 @@ jobs:
         continue-on-error: true
         run: |
           sleep 5
-          REPO_NAME="${GITHUB_REPOSITORY##*/}"
           echo "→ 更新 GHCR 包描述..."
           
           DESCRIPTION="Multi-arch Snell Server ${{ steps.prep.outputs.version }}. Platforms: amd64, 386, arm64, armv7. Docs: https://github.com/${{ github.repository }}"
@@ -341,7 +339,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/user/packages/container/${REPO_NAME}" \
+            "https://api.github.com/user/packages/container/snell" \
             -d "{\"description\":\"${DESCRIPTION}\"}" \
             && echo "✓ GHCR 描述已更新" \
             || echo "⚠️ GHCR 描述更新失败（不影响构建）"
@@ -350,7 +348,6 @@ jobs:
         if: success() && env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
         continue-on-error: true
         run: |
-          REPO_NAME="${GITHUB_REPOSITORY##*/}"
           echo "→ 更新 Docker Hub 仓库描述..."
           
           SHORT_DESC="Multi-arch Snell Server ${{ steps.prep.outputs.version }} - amd64, 386, arm64, armv7"
@@ -364,6 +361,6 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
             -d "{\"description\": \"${SHORT_DESC}\", \"full_description\": \"${FULL_DESC_ESCAPED}\"}" \
-            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/${REPO_NAME}/" \
+            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/snell/" \
             && echo "✓ Docker Hub 描述已更新" \
             || echo "⚠️ Docker Hub 描述更新失败（不影响构建）"
