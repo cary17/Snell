@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+# 信号处理：直接传递信号给子进程
+trap 'kill -TERM $SNELL_PID 2>/dev/null; wait $SNELL_PID 2>/dev/null' TERM INT
+
 # 去除引号和首尾空格
 strip_quotes() {
     echo "$1" | sed -e 's/^[[:space:]"'"'"']//' -e 's/[[:space:]"'"'"']$//'
@@ -42,6 +45,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 cat /snell/snell.conf
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# exec 启动，确保程序作为 PID 1 运行，从而能处理 SIGTERM/SIGINT
+# 启动 snell-server
 echo "Starting snell-server..."
-exec ./snell-server -c /snell/snell.conf -l "${LOG:-notify}"
+./snell-server -c /snell/snell.conf -l "${LOG:-notify}" &
+SNELL_PID=$!
+
+# 等待子进程退出
+wait $SNELL_PID 2>/dev/null
