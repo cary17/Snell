@@ -342,21 +342,17 @@ jobs:
           REPO_NAME="${GITHUB_REPOSITORY##*/}"
           echo "→ 更新 Docker Hub 仓库描述..."
           
-          FULL_DESCRIPTION="# Snell Server Docker Image
-
-Multi-architecture Snell Server supporting amd64, 386, arm64, and armv7 platforms.
-
-## Version: ${{ steps.prep.outputs.version }}
-
-For documentation and usage examples, visit: https://github.com/${{ github.repository }}"
+          SHORT_DESC="Multi-arch Snell Server ${{ steps.prep.outputs.version }} - amd64, 386, arm64, armv7"
+          
+          FULL_DESC="Multi-architecture Snell Server supporting amd64, 386, arm64, and armv7 platforms. Version: ${{ steps.prep.outputs.version }}. For documentation visit: https://github.com/${{ github.repository }}"
+          
+          # 转义 JSON 字符串
+          FULL_DESC_ESCAPED=$(echo "$FULL_DESC" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
           
           curl -X PATCH \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
-            -d "{
-              \"description\": \"Multi-arch Snell Server ${{ steps.prep.outputs.version }} - amd64, 386, arm64, armv7\",
-              \"full_description\": $(echo "$FULL_DESCRIPTION" | jq -Rs .)
-            }" \
+            -d "{\"description\": \"${SHORT_DESC}\", \"full_description\": \"${FULL_DESC_ESCAPED}\"}" \
             "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/${REPO_NAME}/" \
             && echo "✓ Docker Hub 描述已更新" \
             || echo "⚠️ Docker Hub 描述更新失败（不影响构建）"
