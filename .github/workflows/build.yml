@@ -21,6 +21,7 @@ on:
 
 env:
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
 
 jobs:
   check-version:
@@ -32,50 +33,153 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 获取 Snell 版本
+      - name: 获取 Snell 最新版本（带重试）
         id: get_version
         run: |
+          # 获取官方最新版本的函数（带重试）
+          get_official_version() {
+            local max_retries=3
+            local retry_delay=5
+            local attempt=1
+            
+            while [ $attempt -le $max_retries ]; do
+              echo "→ 尝试获取官方版本 (第 $attempt 次)..."
+              
+              LATEST_VERSION=$(curl -sL --connect-timeout 10 --max-time 30 \
+                https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | \
+                grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
+                sort -Vru | head -n 1)
+              
+              # 检查是否成功获取且不是 0.0.0
+              if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" != "0.0.0" ]; then
+                echo "✓ 成功获取官方版本: v${LATEST_VERSION}"
+                echo "$LATEST_VERSION"
+                return 0
+              fi
+              
+              echo "⚠️ 获取失败或版本异常: ${LATEST_VERSION:-空}"
+              
+              if [ $attempt -lt $max_retries ]; then
+                echo "→ 等待 ${retry_delay} 秒后重试..."
+                sleep $retry_delay
+              fi
+              
+              attempt=$((attempt + 1))
+            done
+            
+            echo "✗ 重试 $max_retries 次后仍然失败"
+            return 1
+          }
+          
+          # 如果用户指定了版本，直接使用
           if [ -n "${{ inputs.version }}" ]; then
             INPUT_VERSION="${{ inputs.version }}"
             VERSION_NUM="${INPUT_VERSION#v}"
             VERSION="v${VERSION_NUM}"
-            echo "✓ 使用指定版本: $VERSION"
-          else
-            echo "→ 检测最新版本..."
-            LATEST_VERSION=$(curl -sL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | \
-              grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | \
-              sort -Vru | head -n 1)
-            
-            if [ -z "$LATEST_VERSION" ]; then
-              echo "✗ 无法从官网获取版本号"
-              exit 1
-            fi
-            
-            VERSION="v${LATEST_VERSION}"
-            echo "✓ 检测到最新版本: $VERSION"
+            echo "✓ 使用用户指定版本: $VERSION"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            exit 0
           fi
           
+          # 获取官方最新版本
+          OFFICIAL_VERSION=$(get_official_version)
+          if [ $? -ne 0 ] || [ -z "$OFFICIAL_VERSION" ]; then
+            echo "✗ 无法获取官方版本号，构建终止"
+            exit 1
+          fi
+          
+          VERSION="v${OFFICIAL_VERSION}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "📌 最终版本号: $VERSION"
+          echo "📌 官方最新版本: $VERSION"
+
+      - name: 获取 GHCR 最新版本（带重试）
+        id: get_ghcr_version
+        run: |
+          get_ghcr_version() {
+            local max_retries=3
+            local retry_delay=5
+            local attempt=1
+            
+            while [ $attempt -le $max_retries ]; do
+              echo "→ 尝试获取 GHCR 版本 (第 $attempt 次)..."
+              
+              GHCR_VERSION=$(curl -sL --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/users/${{ github.repository_owner }}/packages/container/snell/versions" | \
+                grep -oP '"name":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | \
+                sort -Vru | head -n 1)
+              
+              if [ -n "$GHCR_VERSION" ]; then
+                echo "✓ 成功获取 GHCR 版本: ${GHCR_VERSION}"
+                echo "$GHCR_VERSION"
+                return 0
+              fi
+              
+              echo "⚠️ 获取失败"
+              
+              if [ $attempt -lt $max_retries ]; then
+                echo "→ 等待 ${retry_delay} 秒后重试..."
+                sleep $retry_delay
+              fi
+              
+              attempt=$((attempt + 1))
+            done
+            
+            # 如果获取失败，返回 v0.0.0 表示没有现有版本
+            echo "⚠️ 无法获取 GHCR 版本，假设不存在"
+            echo "v0.0.0"
+            return 0
+          }
+          
+          GHCR_VERSION=$(get_ghcr_version)
+          echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
+          echo "📦 GHCR 当前版本: $GHCR_VERSION"
 
       - name: 检查是否需要构建
         id: check_build
         run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
+          OFFICIAL_VERSION="${{ steps.get_version.outputs.version }}"
+          GHCR_VERSION="${{ steps.get_ghcr_version.outputs.ghcr_version }}"
           FORCE="${{ inputs.force }}"
           
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "版本对比:"
+          echo "  官方版本: $OFFICIAL_VERSION"
+          echo "  GHCR版本: $GHCR_VERSION"
+          echo "  强制构建: $FORCE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # 强制构建模式
           if [ "$FORCE" = "true" ]; then
-            echo "✓ 强制构建模式"
+            echo "✓ 强制构建模式已启用"
             echo "should_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          if docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:${VERSION} >/dev/null 2>&1; then
-            echo "→ 版本 ${VERSION} 已存在于 GHCR"
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          else
-            echo "✓ 版本 ${VERSION} 需要构建"
+          # 移除 v 前缀用于比较
+          OFFICIAL_NUM="${OFFICIAL_VERSION#v}"
+          GHCR_NUM="${GHCR_VERSION#v}"
+          
+          # 版本比较函数
+          version_gt() {
+            test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1"
+          }
+          
+          # 如果 GHCR 版本是 0.0.0，说明不存在，需要构建
+          if [ "$GHCR_NUM" = "0.0.0" ]; then
+            echo "✓ GHCR 中无现有版本，需要构建"
             echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 比较版本号
+          if version_gt "$OFFICIAL_NUM" "$GHCR_NUM"; then
+            echo "✓ 官方版本 ($OFFICIAL_VERSION) 大于 GHCR 版本 ($GHCR_VERSION)，需要构建"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "→ 官方版本 ($OFFICIAL_VERSION) 不大于 GHCR 版本 ($GHCR_VERSION)，无需构建"
+            echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
   build-and-push:
@@ -99,7 +203,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: env.DOCKER_HUB_USERNAME != ''
+        if: env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -112,10 +216,46 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 准备 Docker Hub 仓库
+        if: env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
+        continue-on-error: true
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          echo "→ 检查 Docker Hub 仓库: ${REPO_NAME}"
+          
+          # 检查仓库是否存在
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/${REPO_NAME}/")
+          
+          if [ "$RESPONSE" = "404" ]; then
+            echo "→ 仓库不存在，尝试创建..."
+            
+            CREATE_RESPONSE=$(curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+              -d "{
+                \"name\": \"${REPO_NAME}\",
+                \"description\": \"Multi-architecture Snell Server - Supports amd64, 386, arm64, armv7\",
+                \"is_private\": false
+              }" \
+              "https://hub.docker.com/v2/repositories/")
+            
+            if echo "$CREATE_RESPONSE" | grep -q '"name"'; then
+              echo "✓ Docker Hub 仓库创建成功"
+            else
+              echo "⚠️ Docker Hub 仓库创建失败（可能已存在或权限不足）"
+              echo "Response: $CREATE_RESPONSE"
+            fi
+          else
+            echo "✓ Docker Hub 仓库已存在"
+          fi
+
       - name: 准备构建参数
         id: prep
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
           
           if [ -n "${{ inputs.debian_version }}" ]; then
             DEBIAN_VERSION="${{ inputs.debian_version }}"
@@ -126,11 +266,11 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "debian_version=$DEBIAN_VERSION" >> $GITHUB_OUTPUT
           
-          GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
+          GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/${REPO_NAME}"
           TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
           
-          if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
-            DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
+          if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
+            DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/${REPO_NAME}"
             TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
           fi
           
@@ -181,6 +321,7 @@ jobs:
         continue-on-error: true
         run: |
           sleep 5
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
           echo "→ 更新 GHCR 包描述..."
           
           DESCRIPTION="Multi-arch Snell Server ${{ steps.prep.outputs.version }}. Platforms: amd64, 386, arm64, armv7. Docs: https://github.com/${{ github.repository }}"
@@ -189,7 +330,33 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/user/packages/container/snell" \
+            "https://api.github.com/user/packages/container/${REPO_NAME}" \
             -d "{\"description\":\"${DESCRIPTION}\"}" \
             && echo "✓ GHCR 描述已更新" \
             || echo "⚠️ GHCR 描述更新失败（不影响构建）"
+      
+      - name: 更新 Docker Hub 仓库描述
+        if: success() && env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
+        continue-on-error: true
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          echo "→ 更新 Docker Hub 仓库描述..."
+          
+          FULL_DESCRIPTION="# Snell Server Docker Image
+
+Multi-architecture Snell Server supporting amd64, 386, arm64, and armv7 platforms.
+
+## Version: ${{ steps.prep.outputs.version }}
+
+For documentation and usage examples, visit: https://github.com/${{ github.repository }}"
+          
+          curl -X PATCH \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+            -d "{
+              \"description\": \"Multi-arch Snell Server ${{ steps.prep.outputs.version }} - amd64, 386, arm64, armv7\",
+              \"full_description\": $(echo "$FULL_DESCRIPTION" | jq -Rs .)
+            }" \
+            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/${REPO_NAME}/" \
+            && echo "✓ Docker Hub 描述已更新" \
+            || echo "⚠️ Docker Hub 描述更新失败（不影响构建）"
