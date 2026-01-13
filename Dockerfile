@@ -6,7 +6,6 @@ ARG BASE_VERSION=stable
 FROM --platform=$BUILDPLATFORM debian:${BASE_VERSION}-slim AS builder
 
 ARG TARGETARCH
-ARG TARGETVARIANT
 ARG SNELL_VERSION
 
 RUN apt-get update && \
@@ -20,17 +19,12 @@ RUN mkdir -p /tmp/snell
 COPY Version /tmp/Version
 
 RUN set -ex && \
-    echo "→ TARGETARCH=${TARGETARCH}, TARGETVARIANT=${TARGETVARIANT}" && \
+    echo "→ TARGETARCH=${TARGETARCH}" && \
     case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
         386)   ARCH="i386" ;; \
         arm64) ARCH="aarch64" ;; \
-        arm) \
-          case "${TARGETVARIANT}" in \
-            v7) ARCH="armv7l" ;; \
-            *) echo "❌ Unsupported ARM variant: ${TARGETVARIANT}" && exit 1 ;; \
-          esac \
-          ;; \
+        arm)   ARCH="armv7l" ;; \
         *) echo "❌ Unsupported arch: ${TARGETARCH}" && exit 1 ;; \
     esac && \
     VERSION="${SNELL_VERSION#v}" && \
