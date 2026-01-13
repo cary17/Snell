@@ -99,35 +99,46 @@ jobs:
             local max_retries=3
             local retry_delay=5
             local attempt=1
+            local repo_name="${GITHUB_REPOSITORY##*/}"
             
             while [ $attempt -le $max_retries ]; do
-              echo "→ 尝试获取 GHCR 版本 (第 $attempt 次)..."
+              echo "→ 尝试获取 GHCR 版本 (第 $attempt 次)..." >&2
               
+              # 尝试多个 API 端点
+              # 方法1: 使用 packages API
               GHCR_VERSION=$(curl -sL --connect-timeout 10 --max-time 30 \
                 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                 -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/users/${{ github.repository_owner }}/packages/container/snell/versions" | \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/users/${{ github.repository_owner }}/packages/container/${repo_name}/versions" 2>/dev/null | \
                 grep -oP '"name":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | \
                 sort -Vru | head -n 1)
               
-              if [ -n "$GHCR_VERSION" ]; then
-                echo "✓ 成功获取 GHCR 版本: ${GHCR_VERSION}"
+              # 如果方法1失败，尝试方法2: 直接检查镜像标签
+              if [ -z "$GHCR_VERSION" ]; then
+                echo "→ 尝试备用方法..." >&2
+                GHCR_VERSION=$(docker manifest inspect ghcr.io/${{ github.repository_owner }}/${repo_name}:latest 2>/dev/null | \
+                  grep -oP '"org.opencontainers.image.version":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+              fi
+              
+              if [ -n "$GHCR_VERSION" ] && [ "$GHCR_VERSION" != "v0.0.0" ]; then
+                echo "✓ 成功获取 GHCR 版本: ${GHCR_VERSION}" >&2
                 echo "$GHCR_VERSION"
                 return 0
               fi
               
-              echo "⚠️ 获取失败"
+              echo "⚠️ 获取失败或版本异常" >&2
               
               if [ $attempt -lt $max_retries ]; then
-                echo "→ 等待 ${retry_delay} 秒后重试..."
+                echo "→ 等待 ${retry_delay} 秒后重试..." >&2
                 sleep $retry_delay
               fi
               
               attempt=$((attempt + 1))
             done
             
-            # 如果获取失败，返回 v0.0.0 表示没有现有版本
-            echo "⚠️ 无法获取 GHCR 版本，假设不存在"
+            # 如果获取失败，返回 v0.0.0 表示没有现有版本（需要构建）
+            echo "⚠️ 无法获取 GHCR 版本，假设不存在（将触发构建）" >&2
             echo "v0.0.0"
             return 0
           }
