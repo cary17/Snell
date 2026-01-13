@@ -48,7 +48,5 @@ COPY --from=builder /tmp/snell-server .
 COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh
 
-EXPOSE 20000
-
 # entrypoint.sh 内部使用 exec 确保信号优雅处理 (SIGTERM/SIGINT)
 ENTRYPOINT ["./entrypoint.sh"]
