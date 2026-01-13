@@ -1,4 +1,75 @@
-name: Build and Push Snell Docker Image
+- name: 获取 GHCR 最新版本（带重试）
+        id: get_ghcr_version
+        run: |
+          get_ghcr_version() {
+            local max_retries=3
+            local retry_delay=5
+            local attempt=1
+            
+            while [ $attempt -le $max_retries ]; do
+              echo "→ 尝试获取 GHCR 版本 (第 $attempt 次)..." >&2
+              
+              # 方法1: 使用 Docker Registry HTTP API V2 (最可靠)
+              echo "  方法1: Docker Registry API..." >&2
+              # 先获取匿名 token
+              TOKEN=$(curl -sL "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" 2>/dev/null | \
+                grep -oP '"token":"\K[^"]+')
+              
+              if [ -n "$TOKEN" ]; then
+                GHCR_VERSION=$(curl -sL \
+                  -H "Authorization: Bearer $TOKEN" \
+                  "https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list" 2>/dev/null | \
+                  grep -oP '"v[0-9]+\.[0-9]+\.[0-9]+"' | \
+                  tr -d '"' | \
+                  sort -Vru | head -n 1)
+              fi
+              
+              # 方法2: 使用 GitHub Packages API
+              if [ -z "$GHCR_VERSION" ]; then
+                echo "  方法2: GitHub Packages API..." >&2
+                GHCR_VERSION=$(curl -sL --connect-timeout 10 --max-time 30 \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/users/${{ github.repository_owner }}/packages/container/snell/versions" 2>/dev/null | \
+                  grep -oP '"name":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | \
+                  sort -Vru | head -n 1)
+              fi
+              
+              # 方法3: 使用 skopeo（如果可用）
+              if [ -z "$GHCR_VERSION" ] && command -v skopeo >/dev/null 2>&1; then
+                echo "  方法3: Skopeo..." >&2
+                GHCR_VERSION=$(skopeo list-tags docker://ghcr.io/${{ github.repository_owner }}/snell 2>/dev/null | \
+                  grep -oP '"v[0-9]+\.[0-9]+\.[0-9]+"' | \
+                  tr -d '"' | \
+                  sort -Vru | head -n 1)
+              fi
+              
+              # 检查是否成功获取
+              if [ -n "$GHCR_VERSION" ] && [ "$GHCR_VERSION" != "v0.0.0" ] && [ "$GHCR_VERSION" != "null" ]; then
+                echo "✓ 成功获取 GHCR 版本: ${GHCR_VERSION}" >&2
+                echo "$GHCR_VERSION"
+                return 0
+              fi
+              
+              echo "  ⚠️ 所有方法均失败，版本: ${GHCR_VERSION:-空}" >&2
+              
+              if [ $attempt -lt $max_retries ]; then
+                echo "→ 等待 ${retry_delay} 秒后重试..." >&2
+                sleep $retry_delay
+              fi
+              
+              attempt=$((attempt + 1))
+            done
+            
+            # 如果获取失败，返回 v0.0.0 表示没有现有版本（需要构建）
+            echo "⚠️ 无法获取 GHCR 版本，假设不存在（将触发构建）" >&2
+            echo "v0.0.0"
+            return 0
+          }
+          
+          GHCR_VERSION=$(get_ghcr_version)
+          echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
+          echo "📦 GHCR 当前版本: $GHCR_VERSION"name: Build and Push Snell Docker Image
 
 on:
   schedule:
@@ -103,30 +174,269 @@ jobs:
             while [ $attempt -le $max_retries ]; do
               echo "→ 尝试获取 GHCR 版本 (第 $attempt 次)..." >&2
               
-              # 尝试多个 API 端点
-              # 方法1: 使用 packages API
+              # 方法1: 使用 GitHub Container Registry API (通过 token 认证)
+              echo "  方法1: GitHub API..." >&2
               GHCR_VERSION=$(curl -sL --connect-timeout 10 --max-time 30 \
-                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
                 "https://api.github.com/users/${{ github.repository_owner }}/packages/container/snell/versions" 2>/dev/null | \
-                grep -oP '"name":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | \
+                jq -r '.[].metadata.container.tags[]' 2>/dev/null | \
+                grep -E '^v[0-9]+\.[0-9]+\.[0-9]+
+
+      - name: 检查是否需要构建
+        id: check_build
+        run: |
+          OFFICIAL_VERSION="${{ steps.get_version.outputs.version }}"
+          GHCR_VERSION="${{ steps.get_ghcr_version.outputs.ghcr_version }}"
+          FORCE="${{ inputs.force }}"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "版本对比:"
+          echo "  官方版本: $OFFICIAL_VERSION"
+          echo "  GHCR版本: $GHCR_VERSION"
+          echo "  强制构建: $FORCE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # 强制构建模式
+          if [ "$FORCE" = "true" ]; then
+            echo "✓ 强制构建模式已启用"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 移除 v 前缀用于比较
+          OFFICIAL_NUM="${OFFICIAL_VERSION#v}"
+          GHCR_NUM="${GHCR_VERSION#v}"
+          
+          # 版本比较函数
+          version_gt() {
+            test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1"
+          }
+          
+          # 如果 GHCR 版本是 0.0.0，说明不存在，需要构建
+          if [ "$GHCR_NUM" = "0.0.0" ]; then
+            echo "✓ GHCR 中无现有版本，需要构建"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 比较版本号
+          if version_gt "$OFFICIAL_NUM" "$GHCR_NUM"; then
+            echo "✓ 官方版本 ($OFFICIAL_VERSION) 大于 GHCR 版本 ($GHCR_VERSION)，需要构建"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "→ 官方版本 ($OFFICIAL_VERSION) 不大于 GHCR 版本 ($GHCR_VERSION)，无需构建"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-and-push:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 准备 Docker Hub 仓库
+        if: env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
+        continue-on-error: true
+        run: |
+          echo "→ 检查 Docker Hub 仓库: snell"
+          
+          # 检查仓库是否存在
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/snell/")
+          
+          if [ "$RESPONSE" = "404" ]; then
+            echo "→ 仓库不存在，尝试创建..."
+            
+            CREATE_RESPONSE=$(curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+              -d "{
+                \"name\": \"snell\",
+                \"description\": \"Multi-architecture Snell Server - Supports amd64, 386, arm64, armv7\",
+                \"is_private\": false
+              }" \
+              "https://hub.docker.com/v2/repositories/")
+            
+            if echo "$CREATE_RESPONSE" | grep -q '"name"'; then
+              echo "✓ Docker Hub 仓库创建成功"
+            else
+              echo "⚠️ Docker Hub 仓库创建失败（可能已存在或权限不足）"
+              echo "Response: $CREATE_RESPONSE"
+            fi
+          else
+            echo "✓ Docker Hub 仓库已存在"
+          fi
+
+      - name: 准备构建参数
+        id: prep
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          
+          if [ -n "${{ inputs.debian_version }}" ]; then
+            DEBIAN_VERSION="${{ inputs.debian_version }}"
+          else
+            DEBIAN_VERSION="stable"
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "debian_version=$DEBIAN_VERSION" >> $GITHUB_OUTPUT
+          
+          # 镜像名固定为 snell（精简命名）
+          GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/snell"
+          TAGS="${GHCR_IMAGE}:${VERSION},${GHCR_IMAGE}:latest"
+          
+          if [ -n "${{ secrets.DOCKER_HUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
+            DOCKER_HUB_IMAGE="${{ secrets.DOCKER_HUB_USERNAME }}/snell"
+            TAGS="${TAGS},${DOCKER_HUB_IMAGE}:${VERSION},${DOCKER_HUB_IMAGE}:latest"
+          fi
+          
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "vcs_ref=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "📦 构建信息:"
+          echo "  基础镜像: debian:$DEBIAN_VERSION"
+          echo "  Snell 版本: $VERSION"
+          echo "  镜像名称: snell"
+          echo "  标签: $TAGS"
+
+      - name: 创建空 Version 目录
+        run: |
+          mkdir -p Version
+          touch Version/.gitkeep
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.prep.outputs.tags }}
+          build-args: |
+            SNELL_VERSION=${{ steps.prep.outputs.version }}
+            BASE_VERSION=${{ steps.prep.outputs.debian_version }}
+            BUILD_DATE=${{ steps.prep.outputs.build_date }}
+            VCS_REF=${{ steps.prep.outputs.vcs_ref }}
+          labels: |
+            org.opencontainers.image.title=Snell Server
+            org.opencontainers.image.description=Multi-architecture Snell Server - Supports amd64, 386, arm64, armv7
+            org.opencontainers.image.version=${{ steps.prep.outputs.version }}
+            org.opencontainers.image.created=${{ steps.prep.outputs.build_date }}
+            org.opencontainers.image.revision=${{ steps.prep.outputs.vcs_ref }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}#readme
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 更新 GHCR 包描述
+        if: success()
+        continue-on-error: true
+        run: |
+          sleep 5
+          echo "→ 更新 GHCR 包描述..."
+          
+          DESCRIPTION="Multi-arch Snell Server ${{ steps.prep.outputs.version }}. Platforms: amd64, 386, arm64, armv7. Docs: https://github.com/${{ github.repository }}"
+          
+          curl -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/user/packages/container/snell" \
+            -d "{\"description\":\"${DESCRIPTION}\"}" \
+            && echo "✓ GHCR 描述已更新" \
+            || echo "⚠️ GHCR 描述更新失败（不影响构建）"
+      
+      - name: 更新 Docker Hub 仓库描述
+        if: success() && env.DOCKER_HUB_USERNAME != '' && env.DOCKER_HUB_TOKEN != ''
+        continue-on-error: true
+        run: |
+          echo "→ 更新 Docker Hub 仓库描述..."
+          
+          SHORT_DESC="Multi-arch Snell Server ${{ steps.prep.outputs.version }} - amd64, 386, arm64, armv7"
+          
+          FULL_DESC="Multi-architecture Snell Server supporting amd64, 386, arm64, and armv7 platforms. Version: ${{ steps.prep.outputs.version }}. For documentation visit: https://github.com/${{ github.repository }}"
+          
+          # 转义 JSON 字符串
+          FULL_DESC_ESCAPED=$(echo "$FULL_DESC" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
+          curl -X PATCH \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+            -d "{\"description\": \"${SHORT_DESC}\", \"full_description\": \"${FULL_DESC_ESCAPED}\"}" \
+            "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_HUB_USERNAME }}/snell/" \
+            && echo "✓ Docker Hub 描述已更新" \
+            || echo "⚠️ Docker Hub 描述更新失败（不影响构建）" | \
                 sort -Vru | head -n 1)
               
-              # 如果方法1失败，尝试方法2: 直接检查镜像标签
+              # 方法2: 使用 crane/skopeo 列出标签（如果安装了）
               if [ -z "$GHCR_VERSION" ]; then
-                echo "→ 尝试备用方法..." >&2
-                GHCR_VERSION=$(docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:latest 2>/dev/null | \
-                  grep -oP '"org.opencontainers.image.version":\s*"\Kv[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+                echo "  方法2: Docker Registry API..." >&2
+                # 获取认证 token
+                TOKEN=$(curl -sL "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" | \
+                  grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+                
+                if [ -n "$TOKEN" ]; then
+                  GHCR_VERSION=$(curl -sL \
+                    -H "Authorization: Bearer $TOKEN" \
+                    -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                    "https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list" 2>/dev/null | \
+                    grep -o '"v[0-9]\+\.[0-9]\+\.[0-9]\+"' | \
+                    tr -d '"' | \
+                    sort -Vru | head -n 1)
+                fi
               fi
               
-              if [ -n "$GHCR_VERSION" ] && [ "$GHCR_VERSION" != "v0.0.0" ]; then
+              # 方法3: 尝试 docker manifest inspect（公共镜像）
+              if [ -z "$GHCR_VERSION" ]; then
+                echo "  方法3: Docker manifest..." >&2
+                GHCR_VERSION=$(docker manifest inspect ghcr.io/${{ github.repository_owner }}/snell:latest 2>/dev/null | \
+                  jq -r '.annotations."org.opencontainers.image.version" // empty' 2>/dev/null | \
+                  head -n 1)
+              fi
+              
+              # 检查是否成功获取
+              if [ -n "$GHCR_VERSION" ] && [ "$GHCR_VERSION" != "v0.0.0" ] && [ "$GHCR_VERSION" != "null" ]; then
                 echo "✓ 成功获取 GHCR 版本: ${GHCR_VERSION}" >&2
                 echo "$GHCR_VERSION"
                 return 0
               fi
               
-              echo "⚠️ 获取失败或版本异常" >&2
+              echo "  ⚠️ 获取失败或版本异常: ${GHCR_VERSION:-空}" >&2
               
               if [ $attempt -lt $max_retries ]; then
                 echo "→ 等待 ${retry_delay} 秒后重试..." >&2
