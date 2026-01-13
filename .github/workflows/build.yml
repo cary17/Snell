@@ -85,6 +85,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -98,19 +101,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        # 修复：if 条件中 secret 的判断方式
-        if: github.repository_owner == '你的Github用户名' || secrets.DOCKER_HUB_TOKEN != ''
+        # 修复：通过 env 变量来检查
+        if: github.repository_owner == '你的Github用户名' || env.DOCKER_HUB_TOKEN != ''
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+          username: ${{ env.DOCKER_HUB_USERNAME }}
+          password: ${{ env.DOCKER_HUB_TOKEN }}
 
       - name: 自动创建 Docker Hub 仓库 (如果不存在)
-        if: secrets.DOCKER_HUB_TOKEN != ''
+        if: env.DOCKER_HUB_TOKEN != ''
         run: |
           REPO_NAME="snell"
-          USER="${{ secrets.DOCKER_HUB_USERNAME }}"
-          TOKEN="${{ secrets.DOCKER_HUB_TOKEN }}"
+          USER="${{ env.DOCKER_HUB_USERNAME }}"
+          TOKEN="${{ env.DOCKER_HUB_TOKEN }}"
           
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$TOKEN" "https://hub.docker.com/v2/repositories/$USER/$REPO_NAME/")
           
@@ -136,5 +139,5 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/snell:latest
-            ${{ secrets.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', secrets.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
-            ${{ secrets.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', secrets.DOCKER_HUB_USERNAME) || '' }}
+            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
+            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', env.DOCKER_HUB_USERNAME) || '' }}
