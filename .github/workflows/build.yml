@@ -26,6 +26,9 @@ env:
 jobs:
   check-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       should_build: ${{ steps.decide.outputs.should_build }}
@@ -33,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # -------- 官方版本 --------
       - name: 获取 Snell 官方版本
         id: version
         run: |
@@ -50,25 +54,40 @@ jobs:
           [ -z "$VERSION" ] && exit 1
           echo "version=v$VERSION" >> $GITHUB_OUTPUT
 
-      - name: 获取 GHCR 版本
+      # -------- GHCR 版本（修复重点）--------
+      - name: 获取 GHCR 最新版本
         id: ghcr
         run: |
+          set -e
           GHCR_VERSION="v0.0.0"
 
-          TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" \
-            | jq -r .token)
+          echo "→ 获取 GHCR token..."
+          TOKEN=$(curl -fsSL \
+            "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" \
+            | jq -r '.token // empty')
 
-          if [ -n "$TOKEN" ]; then
-            GHCR_VERSION=$(curl -fsSL \
-              -H "Authorization: Bearer $TOKEN" \
-              https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list \
-              | jq -r '.tags[]?' \
+          if [ -z "$TOKEN" ]; then
+            echo "⚠️ GHCR token 获取失败"
+            echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "→ 拉取 GHCR tags..."
+          TAGS=$(curl -fsSL \
+            -H "Authorization: Bearer $TOKEN" \
+            https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list \
+            | jq -r '.tags[]?' || true)
+
+          if [ -n "$TAGS" ]; then
+            GHCR_VERSION=$(echo "$TAGS" \
               | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
               | sort -Vru | head -n1 || echo v0.0.0)
           fi
 
+          echo "✓ GHCR 当前版本: $GHCR_VERSION"
           echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
 
+      # -------- 是否构建 --------
       - name: 判断是否需要构建
         id: decide
         run: |
@@ -102,7 +121,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
