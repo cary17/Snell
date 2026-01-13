@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell版本号（如 5.0.1 或 v5.0.1，留空自动获取）'
+        description: 'Snell版本（如 5.0.1 或 v5.0.1，留空自动）'
         required: false
         type: string
       debian_version:
-        description: 'Debian版本（bookworm / stable / testing）'
+        description: 'Debian 版本'
         required: false
         type: string
       force:
@@ -27,19 +27,19 @@ jobs:
   check-version:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get_version.outputs.version }}
-      should_build: ${{ steps.check_build.outputs.should_build }}
+      version: ${{ steps.version.outputs.version }}
+      should_build: ${{ steps.decide.outputs.should_build }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------- 获取官方版本 ----------------
-      - name: 获取 Snell 官方最新版本
-        id: get_version
+      - name: 获取 Snell 官方版本
+        id: version
         run: |
           if [ -n "${{ inputs.version }}" ]; then
-            V="v${{ inputs.version#v }}"
-            echo "version=$V" >> $GITHUB_OUTPUT
+            INPUT="${{ inputs.version }}"
+            VERSION="v${INPUT#v}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -50,11 +50,9 @@ jobs:
           [ -z "$VERSION" ] && exit 1
           echo "version=v$VERSION" >> $GITHUB_OUTPUT
 
-      # ---------------- 获取 GHCR 版本 ----------------
-      - name: 获取 GHCR 最新版本
-        id: get_ghcr
+      - name: 获取 GHCR 版本
+        id: ghcr
         run: |
-          set -e
           GHCR_VERSION="v0.0.0"
 
           TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" \
@@ -71,151 +69,24 @@ jobs:
 
           echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
 
-      # ---------------- 判断是否构建 ----------------
       - name: 判断是否需要构建
-        id: check_build
+        id: decide
         run: |
-          OFF="${{ steps.get_version.outputs.version }}"
-          GHCR="${{ steps.get_ghcr.outputs.ghcr_version }}"
+          OFF="${{ steps.version.outputs.version }}"
+          GHCR="${{ steps.ghcr.outputs.ghcr_version }}"
 
           if [ "${{ inputs.force }}" = "true" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          [ "${GHCR#v}" = "0.0.0" ] && echo "should_build=true" >> $GITHUB_OUTPUT && exit 0
-
-          if [ "$(printf '%s\n%s\n' "${OFF#v}" "${GHCR#v}" | sort -V | tail -n1)" = "${OFF#v}" ] &&
-             [ "$OFF" != "$GHCR" ]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          fi
-
-  build-and-push:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/login-action@v3
-        if: env.DOCKER_HUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKER_HUB_USERNAME }}
-          password: ${{ env.DOCKER_HUB_TOKEN }}
-
-      - name: Build & Push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/snell:latest
-name: Build and Push Snell Docker Image
-
-on:
-  schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Snell版本号（如 5.0.1 或 v5.0.1，留空自动获取）'
-        required: false
-        type: string
-      debian_version:
-        description: 'Debian版本（bookworm / stable / testing）'
-        required: false
-        type: string
-      force:
-        description: '强制构建'
-        required: false
-        type: boolean
-        default: false
-
-env:
-  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-  DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
-
-jobs:
-  check-version:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get_version.outputs.version }}
-      should_build: ${{ steps.check_build.outputs.should_build }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # ---------------- 获取官方版本 ----------------
-      - name: 获取 Snell 官方最新版本
-        id: get_version
-        run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            V="v${{ inputs.version#v }}"
-            echo "version=$V" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
-            | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' \
-            | sort -Vru | head -n1)
-
-          [ -z "$VERSION" ] && exit 1
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-
-      # ---------------- 获取 GHCR 版本 ----------------
-      - name: 获取 GHCR 最新版本
-        id: get_ghcr
-        run: |
-          set -e
-          GHCR_VERSION="v0.0.0"
-
-          TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" \
-            | jq -r .token)
-
-          if [ -n "$TOKEN" ]; then
-            GHCR_VERSION=$(curl -fsSL \
-              -H "Authorization: Bearer $TOKEN" \
-              https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list \
-              | jq -r '.tags[]?' \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -Vru | head -n1 || echo v0.0.0)
-          fi
-
-          echo "ghcr_version=$GHCR_VERSION" >> $GITHUB_OUTPUT
-
-      # ---------------- 判断是否构建 ----------------
-      - name: 判断是否需要构建
-        id: check_build
-        run: |
-          OFF="${{ steps.get_version.outputs.version }}"
-          GHCR="${{ steps.get_ghcr.outputs.ghcr_version }}"
-
-          if [ "${{ inputs.force }}" = "true" ]; then
+          if [ "${GHCR#v}" = "0.0.0" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          [ "${GHCR#v}" = "0.0.0" ] && echo "should_build=true" >> $GITHUB_OUTPUT && exit 0
-
-          if [ "$(printf '%s\n%s\n' "${OFF#v}" "${GHCR#v}" | sort -V | tail -n1)" = "${OFF#v}" ] &&
-             [ "$OFF" != "$GHCR" ]; then
+          if [ "$(printf '%s\n%s\n' "${OFF#v}" "${GHCR#v}" | sort -V | tail -n1)" = "${OFF#v}" ] \
+             && [ "$OFF" != "$GHCR" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
           else
             echo "should_build=false" >> $GITHUB_OUTPUT
