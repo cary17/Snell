@@ -3,7 +3,7 @@ ARG BASE_VERSION=stable
 # =========================
 # Builder
 # =========================
-FROM --platform=$BUILDPLATFORM debian:${BASE_VERSION}-slim AS builder
+FROM --platform=$TARGETPLATFORM debian:${BASE_VERSION}-slim AS builder
 
 ARG TARGETARCH
 ARG SNELL_VERSION
@@ -15,7 +15,6 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /tmp/snell
-
 COPY Version /tmp/Version
 
 RUN set -ex && \
@@ -78,5 +77,6 @@ COPY entrypoint.sh /snell/entrypoint.sh
 RUN chmod +x /snell/snell-server /snell/entrypoint.sh
 
 WORKDIR /snell
+EXPOSE 20000
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/snell/entrypoint.sh"]
