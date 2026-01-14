@@ -61,5 +61,5 @@ ghcr.io/cary17/snell:5.0.1
 ### Docker Hub
 ```bash
 cary17/snell:latest
-cary17e/snell:5.0.1
+cary17/snell:5.0.1
 ```
