@@ -78,7 +78,7 @@ jobs:
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-  build-and-push-version:
+  build-and-push:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -101,7 +101,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        if: env.DOCKER_HUB_TOKEN != ''
+        # 修复：通过 env 变量来检查
+        if: github.repository_owner == '你的Github用户名' || env.DOCKER_HUB_TOKEN != ''
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_HUB_USERNAME }}
@@ -126,7 +127,7 @@ jobs:
             echo "仓库 $USER/$REPO_NAME 已存在。"
           fi
 
-      - name: Build & Push Version Tag
+      - name: Build & Push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -137,146 +138,6 @@ jobs:
             BASE_TAG=${{ needs.check-version.outputs.debian_tag }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
-            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
-          cache-from: type=gha,scope=snell-version
-          cache-to: type=gha,mode=max,scope=snell-version
-
-  build-and-push-pure-latest:
-    needs: [check-version, build-and-push-version]
-    if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    env:
-      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
-      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Login to Docker Hub
-        if: env.DOCKER_HUB_TOKEN != ''
-        uses: docker/login-action@v3
-        with:
-          username: ${{ env.DOCKER_HUB_USERNAME }}
-          password: ${{ env.DOCKER_HUB_TOKEN }}
-
-      - name: Build & Push Pure Latest Tag
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
-          build-args: |
-            SNELL_VERSION=${{ needs.check-version.outputs.version }}
-            BASE_TAG=${{ needs.check-version.outputs.debian_tag }}
-          tags: |
             ghcr.io/${{ github.repository_owner }}/snell:latest
+            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', env.DOCKER_HUB_USERNAME) || '' }}
-          cache-from: type=gha,scope=snell-pure-latest
-          cache-to: type=gha,mode=max,scope=snell-pure-latest
-
-  verify:
-    needs: [build-and-push-version, build-and-push-pure-latest]
-    if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: 登录到 GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 登录到 Docker Hub
-        if: env.DOCKER_HUB_TOKEN != ''
-        uses: docker/login-action@v3
-        with:
-          username: ${{ env.DOCKER_HUB_USERNAME }}
-          password: ${{ env.DOCKER_HUB_TOKEN }}
-
-      - name: 验证镜像
-        run: |
-          /bin/bash << 'EOF'
-          VERSION="${{ needs.check-version.outputs.version }}"
-          GHCR_REPO="ghcr.io/${{ github.repository_owner }}/snell"
-          
-          echo "=== Snell 镜像验证 ==="
-          echo ""
-          
-          echo "1. 验证版本号标签 ${VERSION} 的多架构 manifest:"
-          docker manifest inspect "${GHCR_REPO}:${VERSION}" 2>/dev/null | jq -r '.manifests[] | "   ✓ \(.platform.architecture)/\(.platform.variant // "none") - \(.platform.os)"' || echo "   ✗ 无法获取版本号标签信息"
-          
-          echo ""
-          echo "2. 验证纯 latest 标签的多架构 manifest:"
-          docker manifest inspect "${GHCR_REPO}:latest" 2>/dev/null | jq -r '.manifests[] | "   ✓ \(.platform.architecture)/\(.platform.variant // "none") - \(.platform.os)"' || echo "   ✗ 无法获取latest标签信息"
-          
-          echo ""
-          echo "3. 测试拉取镜像:"
-          echo "   拉取版本号标签 ${VERSION}..."
-          docker pull "${GHCR_REPO}:${VERSION}" --quiet 2>/dev/null && echo "   ✓ 版本号标签拉取成功" || echo "   ✗ 版本号标签拉取失败"
-          echo "   拉取纯 latest 标签..."
-          docker pull "${GHCR_REPO}:latest" --quiet 2>/dev/null && echo "   ✓ latest标签拉取成功" || echo "   ✗ latest标签拉取失败"
-          
-          echo ""
-          echo "4. 检查镜像信息:"
-          echo "   版本号镜像大小:"
-          docker images "${GHCR_REPO}:${VERSION}" --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" 2>/dev/null || true
-          echo "   latest镜像大小:"
-          docker images "${GHCR_REPO}:latest" --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" 2>/dev/null || true
-          
-          echo ""
-          echo "5. 架构支持总结:"
-          echo "   ✓ x86-64 (amd64) - 64位x86架构"
-          echo "   ✓ x86 (i386) - 32位x86架构"
-          echo "   ✓ ARM64 - ARM64架构"
-          echo "   ✓ ARMv7 - ARM32架构"
-          
-          echo ""
-          echo "6. Docker Hub镜像验证:"
-          if [ -n "${{ env.DOCKER_HUB_USERNAME }}" ]; then
-            DOCKERHUB_REPO="${{ env.DOCKER_HUB_USERNAME }}/snell"
-            
-            echo "   验证 ${DOCKERHUB_REPO}:${VERSION}:"
-            docker manifest inspect "${DOCKERHUB_REPO}:${VERSION}" 2>/dev/null && echo "   ✓ Docker Hub 版本号标签存在" || echo "   ✗ Docker Hub 版本号标签不存在"
-            
-            echo "   验证 ${DOCKERHUB_REPO}:latest:"
-            docker manifest inspect "${DOCKERHUB_REPO}:latest" 2>/dev/null && echo "   ✓ Docker Hub latest 标签存在" || echo "   ✗ Docker Hub latest 标签不存在"
-            
-            echo ""
-            echo "7. 使用示例:"
-            echo "   GHCR (版本号标签):"
-            echo "   docker run -d --name snell ${GHCR_REPO}:${VERSION} -confPath /etc/snell/config.json"
-            echo ""
-            echo "   GHCR (纯latest标签):"
-            echo "   docker run -d --name snell ${GHCR_REPO}:latest -confPath /etc/snell/config.json"
-            echo ""
-            echo "   Docker Hub (版本号标签):"
-            echo "   docker run -d --name snell ${DOCKERHUB_REPO}:${VERSION} -confPath /etc/snell/config.json"
-            echo ""
-            echo "   Docker Hub (纯latest标签):"
-            echo "   docker run -d --name snell ${DOCKERHUB_REPO}:latest -confPath /etc/snell/config.json"
-          else
-            echo "   未配置Docker Hub凭证，跳过Docker Hub验证"
-            echo ""
-            echo "7. 使用示例:"
-            echo "   版本号标签:"
-            echo "   docker run -d --name snell ${GHCR_REPO}:${VERSION} -confPath /etc/snell/config.json"
-            echo ""
-            echo "   纯latest标签:"
-            echo "   docker run -d --name snell ${GHCR_REPO}:latest -confPath /etc/snell/config.json"
-          fi
-          
-          echo ""
-          echo "=== 验证完成 ==="
-          echo "所有镜像均已成功构建和推送"
-          EOF
