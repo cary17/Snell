@@ -33,7 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
 COPY entrypoint.sh .
-RUN chmod +x snell-server entrypoint.sh
+RUN chmod +x snell-server entrypoint.sh && \
+    chmod 777 /snell
 
 # 使用 exec 形式的 ENTRYPOINT 确保信号传递
 ENTRYPOINT ["/snell/entrypoint.sh"]
