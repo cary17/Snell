@@ -1,5 +1,5 @@
 ARG BASE_TAG=stable-slim
-FROM --platform=$TARGETPLATFORM debian:${BASE_TAG} AS builder
+FROM debian:${BASE_TAG} AS builder
 
 ARG TARGETARCH
 ARG SNELL_VERSION
