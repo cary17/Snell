@@ -22,6 +22,7 @@ services:
   snell:
     image: ghcr.io/cary17/snell:latest
     container_name: snell
+    #user: 1010:1010
     restart: always
     ports:
       - "20000:20000"
