@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Snell 一键管理脚本 (v2.5)
-# 修复端口/版本提取、状态显示、配置修改交互化、配置复用
+# Snell 一键管理脚本 (v2.5.1)
+# 修复下载地址拼接错误、端口/版本提取、状态显示
 
 set -e
 
@@ -77,19 +77,24 @@ format_version_without_v() {
 
 check_version_exists() {
     local ver="$1" arch=$(get_arch)
-    local v_with=$(format_version_with_v "$ver") v_without=$(format_version_without_v "$ver")
+    local v_with=$(format_version_with_v "$ver")
+    local v_without=$(format_version_without_v "$ver")
+    # 检查官方源
     curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null && return 0
-    curl --head -sf --output /dev/null "${GITHUB_BASE}/v${v_without}/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null && return 0
+    # 检查 GitHub 备份源
+    curl --head -sf --output /dev/null "${GITHUB_BASE}/${v_with}/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null && return 0
     return 1
 }
 
 get_version_url() {
     local ver="$1" arch=$(get_arch)
-    local v_with=$(format_version_with_v "$ver") v_without=$(format_version_without_v "$ver")
+    local v_with=$(format_version_with_v "$ver")
+    # 优先使用官方源
     if curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null; then
         echo "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip"
     else
-        echo "${GITHUB_BASE}/v${v_without}/snell-server-${v_with}-linux-${arch}.zip"
+        # 使用 GitHub 备份源
+        echo "${GITHUB_BASE}/${v_with}/snell-server-${v_with}-linux-${arch}.zip"
     fi
 }
 
@@ -942,7 +947,7 @@ change_config() {
 
     local install_method version
     if [ -f "${SNELL_INSTALL_DIR}/snell-server" ]; then
-        install_method="1"   # 二进制
+        install_method="1"
         version=$(get_installed_version)
     elif docker ps -a | grep -q snell; then
         install_method="2"
@@ -954,21 +959,17 @@ change_config() {
 
     [ -z "$version" ] && version="0.0.0"
 
-    # 交互式收集新配置
     collect_config "$version" "$install_method"
 
-    # 应用配置
     if [ "$install_method" = "1" ]; then
         create_binary_config "$version" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_egress" "$cfg_obfs" "$cfg_host"
         systemctl restart snell
         print_info "Snell 已重启并应用新配置"
     else
-        # Docker: 重新生成 compose 文件并 up -d
         local network_mode=$(grep "network_mode:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}')
         [ -z "$network_mode" ] && network_mode="host"
         local docker_user=$(grep "user:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}' | sed 's/"//g')
         local current_image=$(grep "image:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}')
-        # 使用 install_docker 函数（内部会拉取镜像但已有镜像不会重复拉）
         install_docker "$version" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_egress" "$cfg_obfs" "$cfg_host" "$network_mode" "$docker_user"
         print_info "Docker 容器已重启并应用新配置"
     fi
