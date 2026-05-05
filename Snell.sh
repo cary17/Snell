@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Snell 一键管理脚本 (v2.4)
-# 详细安装向导 + 所有修复
+# Snell 一键管理脚本 (v2.4.1)
+# 修复下载URL版本号丢失、精简配置、IP获取等
 
 set -e
 
@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# 配置路径
+# 配置
 SNELL_INSTALL_DIR="/usr/local/bin"
 SNELL_CONFIG_DIR="/etc/snell"
 SNELL_CONFIG_FILE="${SNELL_CONFIG_DIR}/snell.conf"
@@ -34,14 +34,14 @@ EXCLUDED_PORTS=(
     22 23 25 53 80 110 111 135 139 143 443 445 993 995 1723 3306 3389 5432 5900 6379 8080 8443 8888 9200 27017
 )
 
-# 输出函数 （均输出到 stderr）
+# 输出函数（均输出到 stderr）
 print_info()    { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
 print_error()   { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1" >&2; }
 print_title()   { echo -e "${CYAN}════════════════════════════════════════════════════════${NC}" >&2; echo -e "${CYAN}  $1${NC}" >&2; echo -e "${CYAN}════════════════════════════════════════════════════════${NC}" >&2; }
 print_success() { echo -e "${GREEN}✓${NC} $1" >&2; }
 
-# 读取输入 （stdout 返回结果）
+# 读取输入（stdout 返回）
 read_with_default() {
     local prompt="$1" default="$2" result
     [ -n "$default" ] && prompt="${prompt} [${default}]: " || prompt="${prompt}: "
@@ -62,10 +62,28 @@ read_yes_no() {
     echo "$result"
 }
 
-# 版本号处理
-format_version_with_v()    { local v; v=$(echo "$1" | tr -d '[:space:]'); [[ "$v" =~ ^v ]] && echo "$v" || echo "v${v}"; }
-format_version_without_v() { echo "$1" | tr -d '[:space:]' | sed 's/^v//'; }
+# 清理版本号（去除所有换行、回车、空格）
+clean_version() {
+    echo "$1" | tr -d '\r\n[:space:]'
+}
 
+# 格式化版本号（确保带 v 前缀）
+format_version_with_v() {
+    local v; v=$(clean_version "$1")
+    if [[ ! "$v" =~ ^v ]]; then
+        echo "v${v}"
+    else
+        echo "$v"
+    fi
+}
+
+# 格式化版本号（移除 v 前缀）
+format_version_without_v() {
+    local v; v=$(clean_version "$1")
+    echo "${v#v}"
+}
+
+# 检查版本文件是否存在
 check_version_exists() {
     local ver="$1" arch=$(get_arch)
     local v_with=$(format_version_with_v "$ver") v_without=$(format_version_without_v "$ver")
@@ -74,9 +92,16 @@ check_version_exists() {
     return 1
 }
 
+# 获取版本下载链接
 get_version_url() {
     local ver="$1" arch=$(get_arch)
-    local v_with=$(format_version_with_v "$ver") v_without=$(format_version_without_v "$ver")
+    local v_with=$(format_version_with_v "$ver")
+    local v_without=$(format_version_without_v "$ver")
+    # 防御：如果 v_without 为空或者 v_with 为空就报错
+    if [ -z "$v_without" ] || [ -z "$v_with" ]; then
+        print_error "版本号解析异常：ver=$ver, with=$v_with, without=$v_without" >&2
+        return 1
+    fi
     if curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null; then
         echo "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip"
     else
@@ -87,10 +112,13 @@ get_version_url() {
 get_official_latest_version() {
     local v; v=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell 2>/dev/null | grep -oP 'snell-server-v\K\d+\.\d+\.\d+' | head -1)
     [ -z "$v" ] && v=$(curl -fsSL "${GITHUB_API}" 2>/dev/null | grep -oP '"name": "v\K\d+\.\d+\.\d+"' | sed 's/"//g' | sort -V | tail -1)
-    echo "$v"
+    clean_version "$v"
 }
 
-get_major_version() { local v; v=$(format_version_without_v "$1"); echo "$v" | grep -oP '^\d+' || echo "0"; }
+get_major_version() {
+    local v; v=$(format_version_without_v "$1")
+    echo "$v" | grep -oP '^\d+' || echo "0"
+}
 
 resolve_major_version() {
     case $1 in
@@ -99,7 +127,6 @@ resolve_major_version() {
     esac
 }
 
-# 获取已安装版本号 （修复乱码）
 get_installed_version() {
     if [ -x "${SNELL_INSTALL_DIR}/snell-server" ]; then
         ${SNELL_INSTALL_DIR}/snell-server -v 2>/dev/null | grep -oP '\bv?\K\d+\.\d+\.\d+[a-z0-9]*' | head -1 || echo "未知"
@@ -108,7 +135,6 @@ get_installed_version() {
     fi
 }
 
-# 混淆支持
 check_obfs_support() {
     local major=$(get_major_version "$1")
     [ -z "$major" ] && return 1
@@ -120,7 +146,6 @@ get_supported_obfs() {
     [ "$major" -le 3 ] 2>/dev/null && echo "http/tls" || echo "http"
 }
 
-# 判断私有 IPv4
 is_private_ipv4() {
     [[ "$1" =~ ^127\. ]] && return 0
     [[ "$1" =~ ^10\. ]] && return 0
@@ -129,7 +154,7 @@ is_private_ipv4() {
     return 1
 }
 
-# 获取物理接口 IPv4 （排除 docker, br-*, veth*, tun*, tap*, lo）
+# 获取物理接口 IPv4（排除虚拟接口）
 get_host_ipv4() {
     local phys_ip=""
     while IFS= read -r line; do
@@ -143,11 +168,9 @@ get_host_ipv4() {
     done <<< "$(ip -4 addr show scope global)"
     [ -n "$phys_ip" ] && { echo "$phys_ip"; return 0; }
 
-    # 公网查询后备
     local public; public=$(curl -s4 --connect-timeout 3 ifconfig.me 2>/dev/null) || public=$(curl -s4 --connect-timeout 3 ip.sb 2>/dev/null)
     [ -n "$public" ] && { echo "$public"; return 0; }
 
-    # 最后回退（仍然排除虚拟接口）
     while IFS= read -r line; do
         local iface ip
         iface=$(echo "$line" | awk '{print $2}' | sed 's/://')
@@ -155,16 +178,13 @@ get_host_ipv4() {
         [[ "$iface" =~ ^(lo|docker|br-|veth|tun|tap) ]] && continue
         [ -n "$ip" ] && { echo "$ip"; return 0; }
     done <<< "$(ip -4 addr show scope global)"
-
     return 1
 }
 
-# IPv6 全球单播
 get_host_ipv6() {
     ip -6 addr show scope global | grep -v '^fe80' | grep -oP 'inet6 \K[0-9a-f:]+(?=/)' | grep -v '^::1' | head -1
 }
 
-# 架构
 get_arch() {
     case $(uname -m) in
         x86_64|amd64) echo "amd64" ;;
@@ -175,7 +195,6 @@ get_arch() {
     esac
 }
 
-# 包管理器
 detect_package_manager() {
     if   command -v apt &>/dev/null; then echo "apt"
     elif command -v yum &>/dev/null; then echo "yum"
@@ -200,13 +219,11 @@ install_dependencies() {
     esac
 }
 
-# 版本比较
 version_compare() {
     local v1=$(format_version_without_v "$1") v2=$(format_version_without_v "$2")
     [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -1)" = "$v2" ]
 }
 
-# 端口检查
 is_port_used() {
     local p=$1
     if command -v ss &>/dev/null; then
@@ -250,9 +267,9 @@ detect_interface() {
     ls /sys/class/net 2>/dev/null | grep -v lo | head -1
 }
 
-# 下载二进制
 download_snell_binary() {
-    local ver="$1" arch=$(get_arch) url=$(get_version_url "$ver")
+    local ver=$(clean_version "$1") arch=$(get_arch)
+    local url=$(get_version_url "$ver")
     local v_with=$(format_version_with_v "$ver")
     print_info "正在下载 Snell ${v_with} for ${arch}..."
     print_info "下载地址: ${url}"
@@ -266,7 +283,6 @@ download_snell_binary() {
     chmod +x "${SNELL_INSTALL_DIR}/snell-server"
     cd /; rm -rf "$TMP_DIR"
     print_success "二进制安装完成"
-    return 0
 }
 
 create_system_user() {
@@ -328,7 +344,6 @@ EOF
     print_info "systemd 服务已创建"
 }
 
-# 生成一条 Surge 配置
 generate_surge_config() {
     local host_ip="$1" port="$2" psk="$3" version="$4" obfs="$5" obfs_host="$6"
     local version_without_v=$(format_version_without_v "$version")
@@ -340,7 +355,6 @@ generate_surge_config() {
     echo "$config"
 }
 
-# 显示配置（精简版，IPv4/IPv6 双份）
 show_full_config() {
     local install_type="$1" version="$2" port="$3" psk="$4" ipv6="$5" dns="$6" egress="$7" obfs="$8" host="$9"
     local network_mode="${10:-}" docker_user="${11:-}" docker_image="${12:-}"
@@ -422,16 +436,15 @@ show_full_config() {
     echo -e "${YELLOW}提示: 请保存好以上配置信息，特别是密码！${NC}"
 }
 
-# Docker 镜像仓库测试
 test_docker_registry() {
     curl -s -o /dev/null --connect-timeout 2 "https://${1}/v2/" 2>/dev/null && echo "0" || echo "1"
 }
+
 select_best_docker_registry() {
     print_info "正在测试镜像仓库连接..."
     [ "$(test_docker_registry ghcr.io)" = "0" ] && echo "$DOCKER_IMAGE_GHCR" || echo "$DOCKER_IMAGE_DOCKERHUB"
 }
 
-# 版本选择菜单（所有提示输出到 stderr）
 show_version_menu() {
     {
         local latest_version=$(get_official_latest_version)
@@ -461,7 +474,7 @@ show_version_menu() {
                 2)
                     while true; do
                         custom_version=$(read_with_default "请输入版本号" "")
-                        custom_version=$(echo "$custom_version" | sed 's/^v//' | tr -d ' ')
+                        custom_version=$(echo "$custom_version" | sed 's/^v//' | tr -d '[:space:]')
                         if [ -z "$custom_version" ]; then
                             print_error "版本号不能为空"
                             continue
@@ -492,9 +505,8 @@ show_version_menu() {
     echo "$selected"
 }
 
-# 二进制安装
 install_binary() {
-    local version="$1" port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8"
+    local version=$(clean_version "$1") port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8"
     print_title "二进制安装 Snell"
     install_dependencies
     create_system_user
@@ -507,9 +519,8 @@ install_binary() {
     show_full_config "二进制" "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host"
 }
 
-# Docker 安装
 install_docker() {
-    local version="$1" port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8" network_mode="$9" docker_user="${10}"
+    local version=$(clean_version "$1") port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8" network_mode="$9" docker_user="${10}"
     print_title "Docker 方式安装 Snell"
 
     if ! command -v docker &>/dev/null; then
@@ -575,7 +586,6 @@ EOF
     show_full_config "Docker" "$display_version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host" "$network_mode" "$docker_user" "$full_image"
 }
 
-# 详细安装向导
 install_wizard() {
     print_title "Snell 安装向导"
 
@@ -584,7 +594,6 @@ install_wizard() {
     echo "  2) Docker 安装 (容器化，便于管理)"
     install_method=$(read_with_default "请选择" "1")
 
-    # 版本选择
     version=$(show_version_menu)
     if [ -z "$version" ]; then
         print_error "版本选择失败"
@@ -593,7 +602,6 @@ install_wizard() {
     local version_with_v=$(format_version_with_v "$version")
     print_success "将安装版本: ${version_with_v}"
 
-    # Docker 网络配置
     local network_mode="host" docker_user=""
     if [ "$install_method" = "2" ]; then
         echo ""
@@ -617,7 +625,7 @@ install_wizard() {
         fi
     fi
 
-    # 端口配置
+    # 端口
     echo ""
     print_title "端口配置"
     echo -e "${CYAN}说明: 端口范围 10000-65535，默认自动生成随机可用端口${NC}"
@@ -647,7 +655,7 @@ install_wizard() {
         print_success "已自动生成随机端口: ${port}"
     fi
 
-    # PSK 配置
+    # PSK
     echo ""
     print_title "密码配置"
     echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码${NC}"
@@ -795,7 +803,6 @@ install_wizard() {
     fi
 }
 
-# 查看配置
 view_config() {
     print_title "Snell 配置信息"
     if [ -f "${SNELL_CONFIG_FILE}" ]; then
@@ -832,7 +839,6 @@ view_config() {
     fi
 }
 
-# 查看状态
 show_status() {
     print_title "Snell 运行状态"
     if systemctl is-active snell &>/dev/null; then
@@ -851,7 +857,6 @@ show_status() {
     fi
 }
 
-# 服务管理
 manage_service() {
     local action="$1" action_name="$2"
     if systemctl list-unit-files | grep -q snell.service 2>/dev/null; then
@@ -873,7 +878,6 @@ manage_service() {
     fi
 }
 
-# 更新
 update_snell() {
     print_title "更新 Snell"
     if [ -f "${SNELL_INSTALL_DIR}/snell-server" ]; then
@@ -933,7 +937,6 @@ update_snell() {
     fi
 }
 
-# 修改配置
 change_config() {
     print_title "修改 Snell 配置"
     if [ -f "${SNELL_CONFIG_FILE}" ]; then
@@ -947,7 +950,6 @@ change_config() {
     fi
 }
 
-# 卸载
 uninstall_snell() {
     print_title "彻底卸载 Snell"
     echo -e "${RED}警告：此操作将删除 Snell 及其所有相关文件！${NC}"
@@ -977,7 +979,6 @@ uninstall_snell() {
     echo -e "\n${YELLOW}所有相关文件已清理完成！${NC}"
 }
 
-# 主菜单
 show_menu() {
     clear
     print_title "Snell 一键管理脚本"
