@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Snell 一键管理脚本 (v2.7)
-# 修复 GitHub 下载路径、虚拟网卡过滤、交互式配置修改
+# Snell 一键管理脚本 (v2.8)
+# 修复版本显示、安装后自动显示配置
 
 set -e
 
@@ -67,6 +67,7 @@ clean_version() { echo "$1" | tr -d '\r\n[:space:]'; }
 
 format_version_with_v() {
     local v; v=$(clean_version "$1")
+    [ -z "$v" ] && { echo "v未知"; return; }
     [[ "$v" =~ ^v ]] && echo "$v" || echo "v${v}"
 }
 
@@ -75,59 +76,29 @@ format_version_without_v() {
     echo "${v#v}"
 }
 
-# 下载相关 - 使用和之前正常版本一致的逻辑
-download_snell_binary() {
-    local version=$1
-    local arch=$(get_arch)
-    local version_with_v=$(format_version_with_v "$version")
-    local version_without_v=$(format_version_without_v "$version")
-    
-    # 先尝试官方源下载
-    local official_url="https://dl.nssurge.com/snell/snell-server-${version_with_v}-linux-${arch}.zip"
-    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
-    
-    print_info "正在下载 Snell ${version_with_v} for ${arch}..."
-    
-    rm -rf "${TMP_DIR}"
-    mkdir -p "${TMP_DIR}"
-    cd "${TMP_DIR}"
-    
-    # 先尝试官方源
-    if wget -q --show-progress --timeout=30 --tries=3 "$official_url" -O snell.zip 2>/dev/null; then
-        print_success "从官方源下载成功"
-    # 官方源失败则尝试 GitHub
-    elif wget -q --show-progress --timeout=30 --tries=3 "$github_url" -O snell.zip 2>/dev/null; then
-        print_success "从 GitHub 备份源下载成功"
+# 获取已安装的版本号
+get_installed_version() {
+    if [ -x "${SNELL_INSTALL_DIR}/snell-server" ]; then
+        local raw_output=$(${SNELL_INSTALL_DIR}/snell-server -v 2>&1)
+        # snell-server -v 输出类似: "snell-server version v5.0.1\n..."
+        # 尝试多种匹配方式
+        local ver
+        # 匹配 "v5.0.1" 或 "v5.0.0b2" 格式
+        ver=$(echo "$raw_output" | grep -oP 'v\d+\.\d+\.\d+[a-z0-9]*' | head -1)
+        if [ -n "$ver" ]; then
+            echo "${ver#v}"
+            return 0
+        fi
+        # 备用：匹配 "version 5.0.1" 格式
+        ver=$(echo "$raw_output" | grep -ioP 'version\s+v?\K\d+\.\d+\.\d+[a-z0-9]*' | head -1)
+        if [ -n "$ver" ]; then
+            echo "$ver"
+            return 0
+        fi
+        echo "未知"
     else
-        print_error "下载失败"
-        cd / && rm -rf "${TMP_DIR}"
-        return 1
+        echo "未知"
     fi
-    
-    # 验证并解压
-    if ! unzip -t snell.zip &>/dev/null; then
-        print_error "下载的文件损坏"
-        cd / && rm -rf "${TMP_DIR}"
-        return 1
-    fi
-    
-    print_info "正在解压..."
-    unzip -q snell.zip
-    
-    if [ ! -f "snell-server" ]; then
-        print_error "解压后未找到 snell-server 文件"
-        cd / && rm -rf "${TMP_DIR}"
-        return 1
-    fi
-    
-    mv snell-server "${SNELL_INSTALL_DIR}/snell-server"
-    chmod +x "${SNELL_INSTALL_DIR}/snell-server"
-    
-    cd /
-    rm -rf "${TMP_DIR}"
-    
-    print_success "二进制安装完成"
-    return 0
 }
 
 check_version_exists() {
@@ -136,38 +107,17 @@ check_version_exists() {
     local version_with_v=$(format_version_with_v "$version")
     local version_without_v=$(format_version_without_v "$version")
     
-    # 尝试官方源
     local official_url="https://dl.nssurge.com/snell/snell-server-${version_with_v}-linux-${arch}.zip"
     if curl --head --silent --fail --output /dev/null "$official_url" 2>/dev/null; then
         return 0
     fi
     
-    # 尝试 GitHub 备份源
     local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
     if curl --head --silent --fail --output /dev/null "$github_url" 2>/dev/null; then
         return 0
     fi
     
     return 1
-}
-
-get_version_url() {
-    local version=$1
-    local arch=$(get_arch)
-    local version_with_v=$(format_version_with_v "$version")
-    local version_without_v=$(format_version_without_v "$version")
-    
-    # 优先返回官方源
-    local official_url="https://dl.nssurge.com/snell/snell-server-${version_with_v}-linux-${arch}.zip"
-    if curl --head --silent --fail --output /dev/null "$official_url" 2>/dev/null; then
-        echo "$official_url"
-        return 0
-    fi
-    
-    # 返回 GitHub 备份源
-    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
-    echo "$github_url"
-    return 0
 }
 
 get_official_latest_version() {
@@ -214,14 +164,6 @@ resolve_major_version() {
             ;;
         *) return 1 ;;
     esac
-}
-
-get_installed_version() {
-    if [ -x "${SNELL_INSTALL_DIR}/snell-server" ]; then
-        ${SNELL_INSTALL_DIR}/snell-server -v 2>/dev/null | grep -oP 'v\d+\.\d+\.\d+[a-z0-9]*' | head -1 | sed 's/^v//' || echo "未知"
-    else
-        echo "未知"
-    fi
 }
 
 check_obfs_support() {
@@ -368,7 +310,7 @@ generate_psk() {
 
 detect_interface() {
     local default_iface=$(ip route 2>/dev/null | grep '^default' | awk '{print $5}' | head -1)
-    if [ -n "$default_iface" ] && [ -d "/sys/class/net/$default_iface" ] && [[ ! "$default_iface" =~ ^(lo|docker|br-|veth|tun|tap) ]]; then
+    if [ -n "$default_iface" ] && [[ ! "$default_iface" =~ ^(lo|docker|br-|veth|tun|tap) ]]; then
         echo "$default_iface"
         return 0
     fi
@@ -380,6 +322,56 @@ detect_interface() {
         fi
     done
     ls /sys/class/net 2>/dev/null | grep -vE '^(lo|docker|br-|veth|tun|tap)$' | head -1
+}
+
+download_snell_binary() {
+    local version=$1
+    local arch=$(get_arch)
+    local version_with_v=$(format_version_with_v "$version")
+    local version_without_v=$(format_version_without_v "$version")
+    
+    local official_url="https://dl.nssurge.com/snell/snell-server-${version_with_v}-linux-${arch}.zip"
+    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
+    
+    print_info "正在下载 Snell ${version_with_v} for ${arch}..."
+    
+    rm -rf "${TMP_DIR}"
+    mkdir -p "${TMP_DIR}"
+    cd "${TMP_DIR}"
+    
+    if wget -q --show-progress --timeout=30 --tries=3 "$official_url" -O snell.zip 2>/dev/null; then
+        print_success "从官方源下载成功"
+    elif wget -q --show-progress --timeout=30 --tries=3 "$github_url" -O snell.zip 2>/dev/null; then
+        print_success "从 GitHub 备份源下载成功"
+    else
+        print_error "下载失败"
+        cd / && rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    
+    if ! unzip -t snell.zip &>/dev/null; then
+        print_error "下载的文件损坏"
+        cd / && rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    
+    print_info "正在解压..."
+    unzip -q snell.zip
+    
+    if [ ! -f "snell-server" ]; then
+        print_error "解压后未找到 snell-server 文件"
+        cd / && rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    
+    mv snell-server "${SNELL_INSTALL_DIR}/snell-server"
+    chmod +x "${SNELL_INSTALL_DIR}/snell-server"
+    
+    cd /
+    rm -rf "${TMP_DIR}"
+    
+    print_success "二进制安装完成"
+    return 0
 }
 
 create_system_user() {
@@ -456,11 +448,15 @@ show_full_config() {
     local install_type="$1" version="$2" port="$3" psk="$4" ipv6="$5" dns="$6" egress="$7" obfs="$8" host="$9"
     local network_mode="${10:-}" docker_user="${11:-}" docker_image="${12:-}"
 
-    [ -z "$port" ] && port=$(grep -oP 'listen = ::0:\K\d+' "${SNELL_CONFIG_FILE}" 2>/dev/null || echo "未知")
+    # 如果端口未传入，从配置文件读取
+    [ -z "$port" ] || [ "$port" = "未知" ] && port=$(grep -oP 'listen = ::0:\K\d+' "${SNELL_CONFIG_FILE}" 2>/dev/null || echo "未知")
+
+    # 确保版本号显示正确
+    local version_with_v=$(format_version_with_v "$version")
+    [ "$version_with_v" = "v未知" ] && version_with_v="v${version}"
 
     local host_ipv4=$(get_host_ipv4)
     local host_ipv6=$(get_host_ipv6)
-    local version_with_v=$(format_version_with_v "$version")
 
     clear
     print_title "Snell 安装成功！"
@@ -766,8 +762,11 @@ install_binary() {
     create_binary_service
     systemctl enable snell
     systemctl start snell
+    sleep 1
     print_success "二进制安装完成"
     show_full_config "二进制" "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host"
+    echo ""
+    read -p "按任意键继续..."
 }
 
 install_docker() {
@@ -830,11 +829,14 @@ EOF
         docker-compose pull
     fi
     docker-compose up -d
+    sleep 1
     print_success "Docker 安装完成"
 
     local display_version="${version}"
     [ "$version" != "latest" ] && display_version=$(format_version_with_v "$version")
     show_full_config "Docker" "$display_version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host" "$network_mode" "$docker_user" "$full_image"
+    echo ""
+    read -p "按任意键继续..."
 }
 
 install_wizard() {
@@ -926,6 +928,7 @@ view_config() {
         local config=$(docker exec snell cat /snell/snell.conf 2>/dev/null)
         if [ -n "$config" ]; then
             local ver=$(docker exec snell ./snell-server -v 2>/dev/null | grep -oP 'v\d+\.\d+\.\d+[a-z0-9]*' | sed 's/^v//')
+            [ -z "$ver" ] && ver="unknown"
             local port=$(echo "$config" | grep -oP 'listen = ::0:\K\d+')
             local psk=$(echo "$config" | grep 'psk = ' | cut -d'=' -f2 | xargs)
             local ipv6=$(echo "$config" | grep 'ipv6 = ' | cut -d'=' -f2 | xargs)
@@ -1156,7 +1159,7 @@ main() {
             0) print_info "感谢使用，再见！"; exit 0 ;;
             *) [ -n "$choice" ] && print_warning "无效选择，请重新输入" ;;
         esac
-        if [ -n "$choice" ]; then
+        if [ "$choice" != "1" ] && [ -n "$choice" ]; then
             echo ""
             read -p "按回车键继续..."
         fi
