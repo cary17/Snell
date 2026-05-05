@@ -29,7 +29,7 @@ DOCKER_IMAGE_DOCKERHUB="cary17/snell"
 DOCKER_COMPOSE_DIR="/opt/snell"
 DOCKER_COMPOSE_FILE="${DOCKER_COMPOSE_DIR}/docker-compose.yml"
 
-# 需要排除的常用端口（热门服务默认端口）
+# 需要排除的常用端口
 EXCLUDED_PORTS=(
     22 23 25 53 80 110 111 135 139 143 443 445 993 995 1723 3306 3389 5432 5900 6379 8080 8443 8888 9200 27017
 )
@@ -47,10 +47,27 @@ print_success() {
     echo -e "${GREEN}✓${NC} $1"
 }
 
+# 格式化版本号（确保带 v 前缀）
+format_version_with_v() {
+    local version=$1
+    if [[ ! "$version" =~ ^v ]]; then
+        echo "v${version}"
+    else
+        echo "$version"
+    fi
+}
+
+# 格式化版本号（移除 v 前缀）
+format_version_without_v() {
+    local version=$1
+    echo "$version" | sed 's/^v//'
+}
+
 # 获取大版本号
 get_major_version() {
     local version=$1
-    echo "$version" | cut -d'.' -f1
+    local version_without_v=$(format_version_without_v "$version")
+    echo "$version_without_v" | cut -d'.' -f1
 }
 
 # 检查混淆是否支持
@@ -74,18 +91,6 @@ get_supported_obfs() {
         echo "http/tls"
     else
         echo "http"
-    fi
-}
-
-# 获取混淆说明
-get_obfs_note() {
-    local version=$1
-    local major_version=$(get_major_version "$version")
-    
-    if [ "$major_version" -le 3 ]; then
-        echo "tls 混淆仅在 v3 及以下版本支持"
-    else
-        echo "v4+ 版本仅支持 http 混淆，不支持 tls"
     fi
 }
 
@@ -121,7 +126,9 @@ get_arch() {
 
 # 版本比较
 version_compare() {
-    [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
+    local v1=$(format_version_without_v "$1")
+    local v2=$(format_version_without_v "$2")
+    [ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" = "$v2" ]
 }
 
 # 检查端口是否被占用
@@ -192,17 +199,19 @@ detect_interface() {
 
 # 从官方获取最新版本
 get_official_latest_version() {
-    curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
+    local version=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
         | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' \
-        | head -1
+        | head -1)
+    echo "$version"
 }
 
 # 从 GitHub 仓库获取最新版本
 get_github_latest_version() {
-    curl -fsSL "https://api.github.com/repos/cary17/Snell/contents/Version" \
+    local version=$(curl -fsSL "https://api.github.com/repos/cary17/Snell/contents/Version" \
         | grep -oP '"name": "v\K[0-9]+\.[0-9]+\.[0-9]+"' \
         | sed 's/"//g' \
-        | sort -V | tail -n1
+        | sort -V | tail -n1)
+    echo "$version"
 }
 
 # 获取最新版本
@@ -242,12 +251,13 @@ get_latest_version() {
 # 下载 Snell 二进制文件
 download_snell_binary() {
     local version=$1
+    local version_without_v=$(format_version_without_v "$version")
     local arch=$(get_arch)
-    local filename="snell-server-v${version}-linux-${arch}.zip"
+    local filename="snell-server-v${version_without_v}-linux-${arch}.zip"
     local official_url="https://dl.nssurge.com/snell/${filename}"
-    local backup_url="${GITHUB_BASE}/v${version}/${filename}"
+    local backup_url="${GITHUB_BASE}/v${version_without_v}/${filename}"
     
-    print_info "正在下载 Snell v${version} for ${arch}..."
+    print_info "正在下载 Snell v${version_without_v} for ${arch}..."
     
     local tmp_dir=$(mktemp -d)
     cd "$tmp_dir"
@@ -256,7 +266,7 @@ download_snell_binary() {
     local github_version=$(get_github_latest_version)
     
     local use_backup=false
-    if [ "$version" = "$github_version" ] && [ "$version" != "$official_version" ]; then
+    if [ "$version_without_v" = "$github_version" ] && [ "$version_without_v" != "$official_version" ]; then
         use_backup=true
         print_info "GitHub 版本较新，从备份下载"
     fi
@@ -306,6 +316,7 @@ create_system_user() {
 # 创建配置文件
 create_binary_config() {
     local version=$1
+    local version_without_v=$(format_version_without_v "$version")
     local port=$2
     local psk=$3
     local ipv6=$4
@@ -323,21 +334,21 @@ psk = ${psk}
 ipv6 = ${ipv6}
 EOF
     
-    if [ -n "$dns" ] && version_compare "$version" "4.1.0"; then
+    if [ -n "$dns" ] && version_compare "$version_without_v" "4.1.0"; then
         echo "dns = ${dns}" >> "${SNELL_CONFIG_FILE}"
     fi
     
-    if [ -n "$egress" ] && version_compare "$version" "5.0.0"; then
+    if [ -n "$egress" ] && version_compare "$version_without_v" "5.0.0"; then
         echo "egress-interface = ${egress}" >> "${SNELL_CONFIG_FILE}"
     fi
     
     if [ -n "$obfs" ] && [ -n "$host" ]; then
-        if check_obfs_support "$version" "$obfs"; then
+        if check_obfs_support "$version_without_v" "$obfs"; then
             echo "obfs = ${obfs}" >> "${SNELL_CONFIG_FILE}"
             echo "host = ${host}" >> "${SNELL_CONFIG_FILE}"
             print_info "已启用混淆模式: ${obfs}"
         else
-            local major_version=$(get_major_version "$version")
+            local major_version=$(get_major_version "$version_without_v")
             print_warning "Snell v${major_version} 不支持 ${obfs} 混淆，已跳过"
         fi
     fi
@@ -380,10 +391,11 @@ generate_surge_config() {
     local obfs=$5
     local obfs_host=$6
     
-    local major_version=$(get_major_version "$version")
+    local version_without_v=$(format_version_without_v "$version")
+    local major_version=$(get_major_version "$version_without_v")
     local config="Snell = snell, ${host_ip}, ${port}, psk=\"${psk}\", version=${major_version}, reuse=true"
     
-    if [ -n "$obfs" ] && [ -n "$obfs_host" ] && check_obfs_support "$version" "$obfs"; then
+    if [ -n "$obfs" ] && [ -n "$obfs_host" ] && check_obfs_support "$version_without_v" "$obfs"; then
         config="${config}, obfs=${obfs}, obfs-host=${obfs_host}"
     fi
     
@@ -406,7 +418,8 @@ show_full_config() {
     local docker_image=${12:-}
     
     local host_ip=$(get_host_ip)
-    local major_version=$(get_major_version "$version")
+    local version_without_v=$(format_version_without_v "$version")
+    local major_version=$(get_major_version "$version_without_v")
     
     clear
     print_title "Snell 安装成功！"
@@ -418,7 +431,7 @@ show_full_config() {
     echo ""
     echo -e "${CYAN}安装信息:${NC}"
     echo -e "  安装方式: ${install_type}"
-    echo -e "  Snell 版本: v${version} (协议版本: ${major_version})"
+    echo -e "  Snell 版本: v${version_without_v} (协议版本: ${major_version})"
     [ -n "$docker_image" ] && echo -e "  Docker 镜像: ${docker_image}"
     echo ""
     echo -e "${CYAN}服务配置:${NC}"
@@ -428,7 +441,7 @@ show_full_config() {
     [ -n "$dns" ] && echo -e "  DNS 服务器: ${dns}"
     [ -n "$egress" ] && echo -e "  出口网卡: ${egress}"
     
-    if [ -n "$obfs" ] && [ -n "$host" ] && check_obfs_support "$version" "$obfs"; then
+    if [ -n "$obfs" ] && [ -n "$host" ] && check_obfs_support "$version_without_v" "$obfs"; then
         echo -e "  混淆模式: ${obfs}"
         echo -e "  混淆域名: ${host}"
     fi
@@ -464,7 +477,7 @@ show_full_config() {
     echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
     echo ""
     
-    local surge_config=$(generate_surge_config "$host_ip" "$port" "$psk" "$version" "$obfs" "$host")
+    local surge_config=$(generate_surge_config "$host_ip" "$port" "$psk" "$version_without_v" "$obfs" "$host")
     echo -e "${CYAN}配置:${NC}"
     echo -e "${GREEN}${surge_config}${NC}"
     
@@ -500,9 +513,7 @@ select_best_docker_registry() {
     local ghcr_ok=$(test_docker_registry "ghcr.io")
     local dockerhub_ok=$(test_docker_registry "hub.docker.com")
     
-    if [ "$ghcr_ok" = "0" ] && [ "$dockerhub_ok" = "0" ]; then
-        echo "$DOCKER_IMAGE_GHCR"
-    elif [ "$ghcr_ok" = "0" ]; then
+    if [ "$ghcr_ok" = "0" ]; then
         echo "$DOCKER_IMAGE_GHCR"
     else
         echo "$DOCKER_IMAGE_DOCKERHUB"
@@ -570,21 +581,38 @@ install_docker() {
     fi
     
     local docker_image=""
+    local image_tag=""
+    
     if [ "$version" = "latest" ]; then
         docker_image=$(select_best_docker_registry)
-        docker_image="${docker_image}:latest"
+        image_tag="latest"
     else
-        docker_image="${DOCKER_IMAGE_GHCR}:${version}"
+        # 确保版本号带 v 前缀作为镜像标签
+        local version_with_v=$(format_version_with_v "$version")
+        docker_image=$(select_best_docker_registry)
+        image_tag="${version_with_v}"
+    fi
+    
+    local full_image="${docker_image}:${image_tag}"
+    print_info "使用镜像: ${full_image}"
+    
+    # 验证镜像是否存在（仅对非 latest 版本）
+    if [ "$version" != "latest" ]; then
+        print_info "验证镜像是否存在..."
+        if ! docker manifest inspect "${full_image}" &>/dev/null; then
+            print_error "镜像 ${full_image} 不存在！"
+            print_info "请检查版本号是否正确，或使用 latest 版本"
+            return 1
+        fi
     fi
     
     mkdir -p "${DOCKER_COMPOSE_DIR}"
     
+    # 生成 docker-compose.yml（不使用 version 字段，避免警告）
     cat > "${DOCKER_COMPOSE_FILE}" <<EOF
-version: '3.8'
-
 services:
   snell:
-    image: ${docker_image}
+    image: ${full_image}
     container_name: snell
     restart: unless-stopped
 EOF
@@ -612,10 +640,6 @@ EOF
     [ -n "$obfs" ] && echo "      - OBFS=${obfs}" >> "${DOCKER_COMPOSE_FILE}"
     [ -n "$host" ] && echo "      - HOST=${host}" >> "${DOCKER_COMPOSE_FILE}"
     
-    if [ "$version" = "latest" ]; then
-        echo "    imagePullPolicy: always" >> "${DOCKER_COMPOSE_FILE}"
-    fi
-    
     cd "${DOCKER_COMPOSE_DIR}"
     
     if [ "$version" = "latest" ]; then
@@ -627,7 +651,12 @@ EOF
     
     print_info "Docker 安装完成"
     
-    show_full_config "Docker" "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host" "$network_mode" "$docker_user" "$docker_image"
+    local display_version="${version}"
+    if [ "$version" != "latest" ]; then
+        display_version=$(format_version_with_v "$version")
+    fi
+    
+    show_full_config "Docker" "$display_version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host" "$network_mode" "$docker_user" "$full_image"
 }
 
 # 安装向导
@@ -656,10 +685,10 @@ install_wizard() {
     else
         if [ "$install_method" = "1" ]; then
             read -p "请输入版本号 (例如: 5.0.1): " version
-            version=$(echo "$version" | sed 's/^v//')
+            version=$(format_version_without_v "$version")
         else
             read -p "请输入版本号 (例如: 5.0.1): " version
-            version=$(echo "$version" | sed 's/^v//')
+            version=$(format_version_without_v "$version")
         fi
         print_info "将安装版本: v${version}"
     fi
@@ -745,51 +774,64 @@ install_wizard() {
         print_info "已启用 IPv6"
     fi
     
+    # DNS 配置
     local dns=""
-    if [ "$install_method" = "1" ] && version_compare "$version" "4.1.0"; then
-        echo ""
-        print_title "DNS 配置 (可选)"
-        read -p "请输入 DNS 服务器 (多个用逗号分隔): " dns
-        [ -n "$dns" ] && print_info "已设置 DNS: ${dns}"
-    elif [ "$install_method" = "2" ]; then
-        echo ""
-        print_title "DNS 配置 (可选)"
-        read -p "请输入 DNS 服务器 (多个用逗号分隔): " dns
-        [ -n "$dns" ] && print_info "已设置 DNS: ${dns}"
+    echo ""
+    print_title "DNS 配置 (可选)"
+    echo -e "${CYAN}说明:${NC}"
+    echo "  • 多个 DNS 请用逗号分隔，例如: 1.1.1.1, 8.8.8.8"
+    echo "  • 支持 IPv4 和 IPv6 DNS 服务器"
+    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
+    echo ""
+    read -p "请输入 DNS 服务器: " dns
+    if [ -n "$dns" ]; then
+        print_info "已设置 DNS: ${dns}"
+    else
+        print_info "跳过 DNS 配置"
     fi
     
+    # 出口网卡配置
     local egress=""
-    if [ "$install_method" = "1" ] && version_compare "$version" "5.0.0"; then
-        echo ""
-        print_title "出口网卡配置 (可选)"
-        local default_iface=$(detect_interface)
-        echo -e "检测到的默认网卡: ${YELLOW}${default_iface}${NC}"
-        read -p "请输入出口网卡名称: " egress
-        if [ -z "$egress" ] && [ -n "$default_iface" ]; then
-            read -p "是否使用 ${default_iface}？[y/N]: " use_default
-            [[ "$use_default" =~ ^[Yy]$ ]] && egress="$default_iface"
+    local default_iface=$(detect_interface)
+    echo ""
+    print_title "出口网卡配置 (可选)"
+    echo -e "${CYAN}说明:${NC}"
+    echo "  • 用于指定 Snell 服务使用的网络出口接口"
+    echo "  • 可用的网络接口列表:"
+    ls /sys/class/net | grep -v lo | sed 's/^/    - /'
+    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
+    echo ""
+    echo -e "检测到的默认网卡: ${YELLOW}${default_iface}${NC}"
+    read -p "请输入出口网卡名称: " egress
+    if [ -n "$egress" ]; then
+        if [ -d "/sys/class/net/${egress}" ]; then
+            print_info "已设置出口网卡: ${egress}"
+        else
+            print_warning "网卡 ${egress} 不存在，将跳过配置"
+            egress=""
         fi
-        [ -n "$egress" ] && print_info "已设置出口网卡: ${egress}"
-    elif [ "$install_method" = "2" ]; then
-        echo ""
-        print_title "出口网卡配置 (可选)"
-        read -p "请输入出口网卡名称: " egress
-        [ -n "$egress" ] && print_info "已设置出口网卡: ${egress}"
+    else
+        print_info "跳过出口网卡配置"
     fi
     
+    # OBFS 混淆配置
     echo ""
     print_title "混淆配置 (可选)"
     local obfs=""
     local obfs_host=""
     
     if [ "$install_method" = "1" ]; then
-        local supported_obfs=$(get_supported_obfs "$version")
+        local version_without_v=$(format_version_without_v "$version")
+        local supported_obfs=$(get_supported_obfs "$version_without_v")
         echo -e "${CYAN}当前版本支持的混淆: ${supported_obfs}${NC}"
     fi
+    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
+    echo ""
     
     read -p "是否启用混淆？[y/N]: " enable_obfs
     if [[ "$enable_obfs" =~ ^[Yy]$ ]]; then
-        if [ "$install_method" = "1" ] && [ "$(get_major_version "$version")" -le 3 ]; then
+        local version_without_v=$(format_version_without_v "$version")
+        if [ "$install_method" = "1" ] && [ "$(get_major_version "$version_without_v")" -le 3 ]; then
             echo "请选择混淆模式:"
             echo "1) http"
             echo "2) tls"
@@ -806,16 +848,22 @@ install_wizard() {
         
         read -p "请输入混淆域名 (例如: bing.com): " obfs_host
         if [ -z "$obfs_host" ]; then
-            print_warning "未设置混淆域名"
+            print_warning "未设置混淆域名，将跳过混淆配置"
+            obfs=""
         else
             print_info "已启用混淆: ${obfs} -> ${obfs_host}"
         fi
     fi
     
+    # 显示配置摘要
     echo ""
     print_title "安装配置摘要"
     echo -e "安装方式: ${CYAN}$([ "$install_method" = "1" ] && echo "二进制" || echo "Docker")${NC}"
-    echo -e "版本: ${CYAN}v${version}${NC}"
+    if [ "$install_method" = "1" ]; then
+        echo -e "版本: ${CYAN}v$(format_version_without_v "$version")${NC}"
+    else
+        echo -e "版本: ${CYAN}$([ "$version" = "latest" ] && echo "latest" || echo "v${version}")${NC}"
+    fi
     echo -e "端口: ${CYAN}${port}${NC}"
     echo -e "密码: ${CYAN}${psk}${NC}"
     echo -e "IPv6: ${CYAN}${ipv6}${NC}"
@@ -1024,9 +1072,9 @@ update_snell() {
         cd "${DOCKER_COMPOSE_DIR}"
         
         local current_image=$(grep "image:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}')
-        local current_version=$(echo "$current_image" | cut -d':' -f2)
+        local current_tag=$(echo "$current_image" | cut -d':' -f2)
         
-        if [ "$current_version" = "latest" ]; then
+        if [ "$current_tag" = "latest" ]; then
             docker-compose pull
             docker-compose up -d
             docker image prune -f
@@ -1034,10 +1082,12 @@ update_snell() {
             view_config
         else
             local latest_version=$(get_latest_version)
-            if [ -n "$latest_version" ] && [ "$current_version" != "$latest_version" ]; then
-                read -p "发现新版本 v${latest_version}，是否更新？[y/N]: " confirm
+            local latest_version_with_v=$(format_version_with_v "$latest_version")
+            if [ -n "$latest_version" ] && [ "$current_tag" != "$latest_version_with_v" ]; then
+                read -p "发现新版本 ${latest_version_with_v}，是否更新？[y/N]: " confirm
                 if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                    sed -i "s/${current_version}/${latest_version}/g" "${DOCKER_COMPOSE_FILE}"
+                    local new_image=$(echo "$current_image" | sed "s/${current_tag}/${latest_version_with_v}/")
+                    sed -i "s|image: ${current_image}|image: ${new_image}|g" "${DOCKER_COMPOSE_FILE}"
                     docker-compose pull
                     docker-compose up -d
                     docker image prune -f
