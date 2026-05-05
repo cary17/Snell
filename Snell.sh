@@ -93,6 +93,8 @@ read_yes_no() {
 # 格式化版本号（确保带 v 前缀）
 format_version_with_v() {
     local version=$1
+    # 去除可能的多余空格和换行
+    version=$(echo "$version" | tr -d '[:space:]')
     if [[ ! "$version" =~ ^v ]]; then
         echo "v${version}"
     else
@@ -103,6 +105,7 @@ format_version_with_v() {
 # 格式化版本号（移除 v 前缀）
 format_version_without_v() {
     local version=$1
+    version=$(echo "$version" | tr -d '[:space:]')
     echo "$version" | sed 's/^v//'
 }
 
@@ -122,7 +125,7 @@ check_version_exists() {
     fi
     
     # 尝试 GitHub 备份源
-    local github_url="https://raw.githubusercontent.com/cary17/Snell/main/Version/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
+    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
     if curl --head --silent --fail --output /dev/null "$github_url" 2>/dev/null; then
         return 0
     fi
@@ -146,7 +149,7 @@ get_version_url() {
     fi
     
     # 返回 GitHub 备份源
-    local github_url="https://raw.githubusercontent.com/cary17/Snell/main/Version/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
+    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
     echo "$github_url"
     return 0
 }
@@ -168,16 +171,17 @@ get_official_latest_version() {
     echo "$version"
 }
 
-# 获取大版本号
+# 获取大版本号（只取数字部分）
 get_major_version() {
     local version=$1
     local version_without_v=$(format_version_without_v "$version")
-    echo "$version_without_v" | cut -d'.' -f1
+    # 只提取第一个点之前的数字，忽略字母
+    echo "$version_without_v" | grep -oP '^[0-9]+' || echo "0"
 }
 
 # 处理大版本号输入（如 3、4、5）
 resolve_major_version() {
-    local input=$input
+    local input=$1
     
     case $input in
         3)
@@ -208,13 +212,19 @@ resolve_major_version() {
     esac
 }
 
-# 检查混淆是否支持
+# 检查混淆是否支持（修复整数比较问题）
 check_obfs_support() {
     local version=$1
     local obfs_type=$2
     local major_version=$(get_major_version "$version")
     
-    if [ "$obfs_type" = "tls" ] && [ "$major_version" -gt 3 ]; then
+    # 如果无法提取大版本号，默认只支持 http
+    if [ -z "$major_version" ] || [ "$major_version" -eq 0 ] 2>/dev/null; then
+        [ "$obfs_type" = "http" ] && return 0
+        return 1
+    fi
+    
+    if [ "$obfs_type" = "tls" ] && [ "$major_version" -gt 3 ] 2>/dev/null; then
         return 1
     fi
     return 0
@@ -225,7 +235,7 @@ get_supported_obfs() {
     local version=$1
     local major_version=$(get_major_version "$version")
     
-    if [ "$major_version" -le 3 ]; then
+    if [ -z "$major_version" ] || [ "$major_version" -le 3 ] 2>/dev/null; then
         echo "http/tls"
     else
         echo "http"
@@ -355,7 +365,7 @@ is_port_used() {
 is_port_excluded() {
     local port=$1
     for excluded in "${EXCLUDED_PORTS[@]}"; do
-        if [ "$port" -eq "$excluded" ]; then
+        if [ "$port" -eq "$excluded" ] 2>/dev/null; then
             return 0
         fi
     done
@@ -420,6 +430,7 @@ download_snell_binary() {
     local download_url=$(get_version_url "$version")
     
     print_info "正在下载 Snell ${version_with_v} for ${arch}..."
+    print_info "下载地址: ${download_url}"
     
     rm -rf "${TMP_DIR}"
     mkdir -p "${TMP_DIR}"
@@ -881,7 +892,8 @@ install_wizard() {
         print_error "版本选择失败"
         return 1
     fi
-    print_success "将安装版本: v${version}"
+    local version_with_v=$(format_version_with_v "$version")
+    print_success "将安装版本: ${version_with_v}"
     
     local network_mode="host"
     local docker_user=""
@@ -921,7 +933,7 @@ install_wizard() {
     if [[ "$manual_port" =~ ^[Yy]$ ]]; then
         while true; do
             port=$(read_with_default "请输入端口号" "")
-            if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 10000 ] && [ "$port" -le 65535 ]; then
+            if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 10000 ] 2>/dev/null && [ "$port" -le 65535 ] 2>/dev/null; then
                 if is_port_used "$port"; then
                     print_warning "端口 ${port} 已被占用，请重新输入"
                 else
@@ -1044,7 +1056,8 @@ install_wizard() {
     enable_obfs=$(read_yes_no "是否启用混淆" "n")
     if [[ "$enable_obfs" =~ ^[Yy]$ ]]; then
         local version_without_v=$(format_version_without_v "$version")
-        if [ "$install_method" = "1" ] && [ "$(get_major_version "$version_without_v")" -le 3 ]; then
+        local major_ver=$(get_major_version "$version_without_v")
+        if [ "$install_method" = "1" ] && [ -n "$major_ver" ] && [ "$major_ver" -le 3 ] 2>/dev/null; then
             echo "请选择混淆模式:"
             echo "  1) http"
             echo "  2) tls"
@@ -1072,7 +1085,7 @@ install_wizard() {
     echo ""
     print_title "安装配置摘要"
     echo -e "安装方式: ${CYAN}$([ "$install_method" = "1" ] && echo "二进制" || echo "Docker")${NC}"
-    echo -e "版本: ${CYAN}v$(format_version_without_v "$version")${NC}"
+    echo -e "版本: ${CYAN}${version_with_v}${NC}"
     echo -e "端口: ${CYAN}${port}${NC}"
     echo -e "密码: ${CYAN}${psk}${NC}"
     echo -e "IPv6: ${CYAN}${ipv6}${NC}"
@@ -1244,7 +1257,8 @@ update_snell() {
             return 0
         fi
         
-        confirm=$(read_yes_no "是否更新到 v${latest_version}" "n")
+        local latest_with_v=$(format_version_with_v "$latest_version")
+        confirm=$(read_yes_no "是否更新到 ${latest_with_v}" "n")
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             return 0
         fi
