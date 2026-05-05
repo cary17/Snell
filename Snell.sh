@@ -177,7 +177,7 @@ get_major_version() {
 
 # 处理大版本号输入（如 3、4、5）
 resolve_major_version() {
-    local input=$1
+    local input=$input
     
     case $input in
         3)
@@ -574,6 +574,7 @@ show_full_config() {
     local host_ip=$(get_host_ip)
     local version_without_v=$(format_version_without_v "$version")
     local major_version=$(get_major_version "$version_without_v")
+    local version_with_v=$(format_version_with_v "$version")
     
     clear
     print_title "Snell 安装成功！"
@@ -690,7 +691,7 @@ show_version_menu() {
     echo ""
     
     while true; do
-        read -p "请选择 [1-2]: " choice
+        choice=$(read_with_default "请选择" "1")
         case $choice in
             1)
                 if [ -z "$latest_version" ]; then
@@ -702,7 +703,7 @@ show_version_menu() {
                 ;;
             2)
                 while true; do
-                    read -p "请输入版本号: " custom_version
+                    custom_version=$(read_with_default "请输入版本号" "")
                     custom_version=$(echo "$custom_version" | sed 's/^v//' | tr -d ' ')
                     
                     if [ -z "$custom_version" ]; then
@@ -772,16 +773,16 @@ install_binary() {
 
 # Docker 安装
 install_docker() {
-    local version=${1:-latest}
-    local port=${2:-20000}
-    local psk=${3:-$(generate_psk)}
-    local ipv6=${4:-false}
-    local dns=${5:-}
-    local egress=${6:-}
-    local obfs=${7:-}
-    local host=${8:-}
-    local network_mode=${9:-host}
-    local docker_user=${10:-}
+    local version=$1
+    local port=$2
+    local psk=$3
+    local ipv6=$4
+    local dns=$5
+    local egress=$6
+    local obfs=$7
+    local host=$8
+    local network_mode=$9
+    local docker_user=${10}
     
     print_title "Docker 方式安装 Snell"
     
@@ -868,13 +869,13 @@ EOF
 install_wizard() {
     print_title "Snell 安装向导"
     
+    # 选择安装方式
     echo "请选择安装方式："
     echo "  1) 二进制安装 (systemd，性能最优) 【默认】"
     echo "  2) Docker 安装 (容器化，便于管理)"
     install_method=$(read_with_default "请选择" "1")
     
-    # 统一版本选择
-    local version
+    # 选择版本（二进制和 Docker 都用同样的版本选择）
     version=$(show_version_menu)
     if [ -z "$version" ]; then
         print_error "版本选择失败"
