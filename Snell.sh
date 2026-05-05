@@ -158,7 +158,7 @@ get_official_latest_version() {
         | head -1)
     
     if [ -z "$version" ]; then
-        # 如果官方获取失败，从 GitHub 获取最新
+        # 如果官方获取失败，从 GitHub 获取最新稳定版
         version=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
             | grep -oP '"name": "v\K[0-9]+\.[0-9]+\.[0-9]+"' \
             | sed 's/"//g' \
@@ -178,25 +178,34 @@ get_major_version() {
 # 处理大版本号输入（如 3、4、5）
 resolve_major_version() {
     local input=$1
-    local major_versions="3 4 5"
     
-    for major in $major_versions; do
-        if [ "$input" = "$major" ]; then
-            # 获取该大版本的最新稳定版
-            local all_versions=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
-                | grep -oP '"name": "v\K[0-9]+\.[0-9]+\.[0-9]+"' \
+    case $input in
+        3)
+            # 获取 v3.x 的最新稳定版
+            local v3_version=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
+                | grep -oP '"name": "v\K3\.[0-9]+\.[0-9]+"' \
                 | sed 's/"//g' \
-                | grep "^${major}\." \
                 | sort -V | tail -n1)
-            
-            if [ -n "$all_versions" ]; then
-                echo "$all_versions"
-                return 0
-            fi
-        fi
-    done
-    
-    return 1
+            echo "$v3_version"
+            ;;
+        4)
+            local v4_version=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
+                | grep -oP '"name": "v\K4\.[0-9]+\.[0-9]+"' \
+                | sed 's/"//g' \
+                | sort -V | tail -n1)
+            echo "$v4_version"
+            ;;
+        5)
+            local v5_version=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
+                | grep -oP '"name": "v\K5\.[0-9]+\.[0-9]+"' \
+                | sed 's/"//g' \
+                | sort -V | tail -n1)
+            echo "$v5_version"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 # 检查混淆是否支持
@@ -241,7 +250,7 @@ get_host_ip() {
     return 1
 }
 
-# 获取系统架构（适配多种架构）
+# 获取系统架构
 get_arch() {
     local arch=$(uname -m)
     case $arch in
@@ -680,14 +689,13 @@ show_version_menu() {
     echo "  • 脚本会自动验证版本是否存在于官方源或 GitHub 备份"
     echo ""
     
-    local choice
     while true; do
         read -p "请选择 [1-2]: " choice
         case $choice in
             1)
                 if [ -z "$latest_version" ]; then
                     print_error "无法获取最新版本信息"
-                    return 1
+                    continue
                 fi
                 echo "$latest_version"
                 return 0
@@ -695,7 +703,12 @@ show_version_menu() {
             2)
                 while true; do
                     read -p "请输入版本号: " custom_version
-                    custom_version=$(echo "$custom_version" | sed 's/^v//')
+                    custom_version=$(echo "$custom_version" | sed 's/^v//' | tr -d ' ')
+                    
+                    if [ -z "$custom_version" ]; then
+                        print_error "版本号不能为空"
+                        continue
+                    fi
                     
                     # 检查是否为大版本号
                     if [[ "$custom_version" =~ ^[0-9]+$ ]]; then
@@ -720,7 +733,7 @@ show_version_menu() {
                 done
                 ;;
             *)
-                print_warning "无效选择，请重新输入"
+                print_warning "无效选择，请输入 1 或 2"
                 ;;
         esac
     done
