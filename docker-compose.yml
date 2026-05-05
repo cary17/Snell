@@ -3,6 +3,7 @@ version: ‘3.8’
 services:
 snell:
 image: ghcr.io/cary17/snell:latest
+#image: cary17/snell:latest
 container_name: snell
 restart: unless-stopped
 
