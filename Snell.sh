@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Snell 一键管理脚本 (v2.4.1)
-# 修复下载URL版本号丢失、精简配置、IP获取等
+# Snell 一键管理脚本 (v2.5)
+# 修复端口/版本提取、状态显示、配置修改交互化、配置复用
 
 set -e
 
@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# 配置
+# 配置路径
 SNELL_INSTALL_DIR="/usr/local/bin"
 SNELL_CONFIG_DIR="/etc/snell"
 SNELL_CONFIG_FILE="${SNELL_CONFIG_DIR}/snell.conf"
@@ -62,28 +62,19 @@ read_yes_no() {
     echo "$result"
 }
 
-# 清理版本号（去除所有换行、回车、空格）
-clean_version() {
-    echo "$1" | tr -d '\r\n[:space:]'
-}
+# 版本号处理
+clean_version() { echo "$1" | tr -d '\r\n[:space:]'; }
 
-# 格式化版本号（确保带 v 前缀）
 format_version_with_v() {
     local v; v=$(clean_version "$1")
-    if [[ ! "$v" =~ ^v ]]; then
-        echo "v${v}"
-    else
-        echo "$v"
-    fi
+    [[ "$v" =~ ^v ]] && echo "$v" || echo "v${v}"
 }
 
-# 格式化版本号（移除 v 前缀）
 format_version_without_v() {
     local v; v=$(clean_version "$1")
     echo "${v#v}"
 }
 
-# 检查版本文件是否存在
 check_version_exists() {
     local ver="$1" arch=$(get_arch)
     local v_with=$(format_version_with_v "$ver") v_without=$(format_version_without_v "$ver")
@@ -92,16 +83,9 @@ check_version_exists() {
     return 1
 }
 
-# 获取版本下载链接
 get_version_url() {
     local ver="$1" arch=$(get_arch)
-    local v_with=$(format_version_with_v "$ver")
-    local v_without=$(format_version_without_v "$ver")
-    # 防御：如果 v_without 为空或者 v_with 为空就报错
-    if [ -z "$v_without" ] || [ -z "$v_with" ]; then
-        print_error "版本号解析异常：ver=$ver, with=$v_with, without=$v_without" >&2
-        return 1
-    fi
+    local v_with=$(format_version_with_v "$ver") v_without=$(format_version_without_v "$ver")
     if curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null; then
         echo "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip"
     else
@@ -129,7 +113,7 @@ resolve_major_version() {
 
 get_installed_version() {
     if [ -x "${SNELL_INSTALL_DIR}/snell-server" ]; then
-        ${SNELL_INSTALL_DIR}/snell-server -v 2>/dev/null | grep -oP '\bv?\K\d+\.\d+\.\d+[a-z0-9]*' | head -1 || echo "未知"
+        ${SNELL_INSTALL_DIR}/snell-server -v 2>/dev/null | grep -oP 'v\d+\.\d+\.\d+[a-z0-9]*' | head -1 | sed 's/^v//' || echo "未知"
     else
         echo "未知"
     fi
@@ -154,7 +138,6 @@ is_private_ipv4() {
     return 1
 }
 
-# 获取物理接口 IPv4（排除虚拟接口）
 get_host_ipv4() {
     local phys_ip=""
     while IFS= read -r line; do
@@ -268,8 +251,7 @@ detect_interface() {
 }
 
 download_snell_binary() {
-    local ver=$(clean_version "$1") arch=$(get_arch)
-    local url=$(get_version_url "$ver")
+    local ver=$(clean_version "$1") arch=$(get_arch) url=$(get_version_url "$ver")
     local v_with=$(format_version_with_v "$ver")
     print_info "正在下载 Snell ${v_with} for ${arch}..."
     print_info "下载地址: ${url}"
@@ -359,6 +341,8 @@ show_full_config() {
     local install_type="$1" version="$2" port="$3" psk="$4" ipv6="$5" dns="$6" egress="$7" obfs="$8" host="$9"
     local network_mode="${10:-}" docker_user="${11:-}" docker_image="${12:-}"
 
+    [ -z "$port" ] && port=$(grep -oP 'listen = ::0:\K\d+' "${SNELL_CONFIG_FILE}" 2>/dev/null || echo "未知")
+
     local host_ipv4=$(get_host_ipv4)
     local host_ipv6=$(get_host_ipv6)
     local version_with_v=$(format_version_with_v "$version")
@@ -373,7 +357,7 @@ show_full_config() {
     echo ""
     echo -e "  安装方式: ${install_type}"
     echo -e "  Version: ${version_with_v}"
-    echo -e "  PORT: ${port:-未知}"
+    echo -e "  PORT: ${port}"
     echo -e "  PSK: ${psk}"
     echo -ne "  IPv6 : ${ipv6}"
     [ -n "$dns" ] && echo -ne " | DNS: ${dns}"
@@ -436,9 +420,7 @@ show_full_config() {
     echo -e "${YELLOW}提示: 请保存好以上配置信息，特别是密码！${NC}"
 }
 
-test_docker_registry() {
-    curl -s -o /dev/null --connect-timeout 2 "https://${1}/v2/" 2>/dev/null && echo "0" || echo "1"
-}
+test_docker_registry() { curl -s -o /dev/null --connect-timeout 2 "https://${1}/v2/" 2>/dev/null && echo "0" || echo "1"; }
 
 select_best_docker_registry() {
     print_info "正在测试镜像仓库连接..."
@@ -503,6 +485,165 @@ show_version_menu() {
         done
     } >&2
     echo "$selected"
+}
+
+# 交互式收集配置（不包含安装方式和版本选择）
+collect_config() {
+    local version="$1" install_method="$2"
+
+    # 端口
+    echo ""
+    print_title "端口配置"
+    echo -e "${CYAN}说明: 端口范围 10000-65535，默认自动生成随机可用端口${NC}"
+    manual_port=$(read_yes_no "是否手动指定端口" "n")
+    if [[ "$manual_port" =~ ^[Yy]$ ]]; then
+        while true; do
+            port=$(read_with_default "请输入端口号" "")
+            if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 10000 ] 2>/dev/null && [ "$port" -le 65535 ] 2>/dev/null; then
+                if is_port_used "$port"; then
+                    print_warning "端口 ${port} 已被占用，请重新输入"
+                else
+                    if is_port_excluded "$port"; then
+                        print_warning "端口 ${port} 是常用服务端口，建议更换"
+                        confirm_port=$(read_yes_no "是否继续使用" "n")
+                        if [[ "$confirm_port" =~ ^[Yy]$ ]]; then break; fi
+                    else
+                        break
+                    fi
+                fi
+            else
+                print_error "端口号必须在 10000-65535 之间"
+            fi
+        done
+    else
+        port=$(generate_random_port)
+        print_success "已自动生成随机端口: ${port}"
+    fi
+
+    # PSK
+    echo ""
+    print_title "密码配置"
+    echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码${NC}"
+    manual_psk=$(read_yes_no "是否手动设置密码" "n")
+    if [[ "$manual_psk" =~ ^[Yy]$ ]]; then
+        psk=$(read_with_default "请输入密码" "")
+        if [ -z "$psk" ]; then
+            psk=$(generate_psk)
+            print_success "已自动生成密码: ${psk}"
+        fi
+    else
+        psk=$(generate_psk)
+        print_success "已自动生成密码: ${psk}"
+    fi
+
+    # IPv6
+    echo ""
+    print_title "IPv6 配置"
+    echo -e "${CYAN}说明: 是否启用 IPv6 监听，默认关闭 (false)${NC}"
+    ipv6_choice=$(read_yes_no "是否启用 IPv6" "n")
+    local ipv6="false"
+    if [[ "$ipv6_choice" =~ ^[Yy]$ ]]; then
+        ipv6="true"
+        print_info "已启用 IPv6"
+    else
+        print_info "IPv6 保持关闭（默认）"
+    fi
+
+    # DNS
+    local dns=""
+    echo ""
+    print_title "DNS 配置 (可选)"
+    echo -e "${CYAN}说明:${NC}"
+    echo "  • 多个 DNS 请用逗号分隔，例如: 1.1.1.1, 8.8.8.8"
+    echo "  • 支持 IPv4 和 IPv6 DNS 服务器"
+    echo "  • 不配置则使用系统默认 DNS"
+    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
+    echo ""
+    dns=$(read_with_default "请输入 DNS 服务器" "")
+    if [ -n "$dns" ]; then
+        print_info "已设置 DNS: ${dns}"
+    else
+        print_info "跳过 DNS 配置（使用系统默认）"
+    fi
+
+    # 出口网卡
+    local egress="" default_iface=$(detect_interface)
+    echo ""
+    print_title "出口网卡配置 (可选)"
+    echo -e "${CYAN}说明:${NC}"
+    echo "  • 用于指定 Snell 服务使用的网络出口接口"
+    echo "  • 可用的网络接口列表:"
+    if [ -d "/sys/class/net" ]; then
+        ls /sys/class/net | grep -v lo | sed 's/^/    - /'
+    else
+        echo "    (无法获取网络接口列表)"
+    fi
+    echo "  • 不配置则使用系统默认路由"
+    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
+    echo ""
+    [ -n "$default_iface" ] && echo -e "检测到的默认网卡: ${YELLOW}${default_iface}${NC}"
+    egress=$(read_with_default "请输入出口网卡名称" "")
+    if [ -n "$egress" ]; then
+        if [ -d "/sys/class/net/${egress}" ]; then
+            print_info "已设置出口网卡: ${egress}"
+        else
+            print_warning "网卡 ${egress} 不存在，将跳过配置"
+            egress=""
+        fi
+    else
+        print_info "跳过出口网卡配置（使用默认路由）"
+    fi
+
+    # 混淆
+    local obfs="" obfs_host=""
+    echo ""
+    print_title "混淆配置 (可选)"
+    echo -e "${CYAN}说明:${NC}"
+    echo "  • 混淆用于隐藏协议特征"
+    echo "  • http 混淆所有版本支持"
+    echo "  • tls 混淆仅 v3 及以下版本支持"
+    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
+    echo ""
+    if [ "$install_method" = "1" ]; then
+        local version_without_v=$(format_version_without_v "$version")
+        local supported_obfs=$(get_supported_obfs "$version_without_v")
+        echo -e "当前版本支持的混淆: ${CYAN}${supported_obfs}${NC}"
+    fi
+    enable_obfs=$(read_yes_no "是否启用混淆" "n")
+    if [[ "$enable_obfs" =~ ^[Yy]$ ]]; then
+        local version_without_v=$(format_version_without_v "$version")
+        local major_ver=$(get_major_version "$version_without_v")
+        if [ "$install_method" = "1" ] && [ -n "$major_ver" ] && [ "$major_ver" -le 3 ] 2>/dev/null; then
+            echo "请选择混淆模式:"
+            echo "  1) http"
+            echo "  2) tls"
+            obfs_choice=$(read_with_default "请选择" "1")
+            case $obfs_choice in
+                1) obfs="http" ;;
+                2) obfs="tls" ;;
+                *) obfs="http" ;;
+            esac
+        else
+            obfs="http"
+            print_info "使用 http 混淆"
+        fi
+        obfs_host=$(read_with_default "请输入混淆域名 (例如: bing.com)" "")
+        if [ -z "$obfs_host" ]; then
+            print_warning "未设置混淆域名，将跳过混淆配置"
+            obfs=""
+        else
+            print_info "已启用混淆: ${obfs} -> ${obfs_host}"
+        fi
+    fi
+
+    # 导出到全局变量供调用者使用
+    cfg_port="$port"
+    cfg_psk="$psk"
+    cfg_ipv6="$ipv6"
+    cfg_dns="$dns"
+    cfg_egress="$egress"
+    cfg_obfs="$obfs"
+    cfg_host="$obfs_host"
 }
 
 install_binary() {
@@ -625,152 +766,11 @@ install_wizard() {
         fi
     fi
 
-    # 端口
-    echo ""
-    print_title "端口配置"
-    echo -e "${CYAN}说明: 端口范围 10000-65535，默认自动生成随机可用端口${NC}"
-    manual_port=$(read_yes_no "是否手动指定端口" "n")
-    local port
-    if [[ "$manual_port" =~ ^[Yy]$ ]]; then
-        while true; do
-            port=$(read_with_default "请输入端口号" "")
-            if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 10000 ] 2>/dev/null && [ "$port" -le 65535 ] 2>/dev/null; then
-                if is_port_used "$port"; then
-                    print_warning "端口 ${port} 已被占用，请重新输入"
-                else
-                    if is_port_excluded "$port"; then
-                        print_warning "端口 ${port} 是常用服务端口，建议更换"
-                        confirm_port=$(read_yes_no "是否继续使用" "n")
-                        if [[ "$confirm_port" =~ ^[Yy]$ ]]; then break; fi
-                    else
-                        break
-                    fi
-                fi
-            else
-                print_error "端口号必须在 10000-65535 之间"
-            fi
-        done
-    else
-        port=$(generate_random_port)
-        print_success "已自动生成随机端口: ${port}"
-    fi
+    # 收集配置
+    collect_config "$version" "$install_method"
 
-    # PSK
-    echo ""
-    print_title "密码配置"
-    echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码${NC}"
-    manual_psk=$(read_yes_no "是否手动设置密码" "n")
-    local psk
-    if [[ "$manual_psk" =~ ^[Yy]$ ]]; then
-        psk=$(read_with_default "请输入密码" "")
-        if [ -z "$psk" ]; then
-            psk=$(generate_psk)
-            print_success "已自动生成密码: ${psk}"
-        fi
-    else
-        psk=$(generate_psk)
-        print_success "已自动生成密码: ${psk}"
-    fi
-
-    # IPv6
-    echo ""
-    print_title "IPv6 配置"
-    echo -e "${CYAN}说明: 是否启用 IPv6 监听，默认关闭 (false)${NC}"
-    ipv6_choice=$(read_yes_no "是否启用 IPv6" "n")
-    local ipv6="false"
-    if [[ "$ipv6_choice" =~ ^[Yy]$ ]]; then
-        ipv6="true"
-        print_info "已启用 IPv6"
-    else
-        print_info "IPv6 保持关闭（默认）"
-    fi
-
-    # DNS
-    local dns=""
-    echo ""
-    print_title "DNS 配置 (可选)"
-    echo -e "${CYAN}说明:${NC}"
-    echo "  • 多个 DNS 请用逗号分隔，例如: 1.1.1.1, 8.8.8.8"
-    echo "  • 支持 IPv4 和 IPv6 DNS 服务器"
-    echo "  • 不配置则使用系统默认 DNS"
-    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
-    echo ""
-    dns=$(read_with_default "请输入 DNS 服务器" "")
-    if [ -n "$dns" ]; then
-        print_info "已设置 DNS: ${dns}"
-    else
-        print_info "跳过 DNS 配置（使用系统默认）"
-    fi
-
-    # 出口网卡
-    local egress="" default_iface=$(detect_interface)
-    echo ""
-    print_title "出口网卡配置 (可选)"
-    echo -e "${CYAN}说明:${NC}"
-    echo "  • 用于指定 Snell 服务使用的网络出口接口"
-    echo "  • 可用的网络接口列表:"
-    if [ -d "/sys/class/net" ]; then
-        ls /sys/class/net | grep -v lo | sed 's/^/    - /'
-    else
-        echo "    (无法获取网络接口列表)"
-    fi
-    echo "  • 不配置则使用系统默认路由"
-    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
-    echo ""
-    [ -n "$default_iface" ] && echo -e "检测到的默认网卡: ${YELLOW}${default_iface}${NC}"
-    egress=$(read_with_default "请输入出口网卡名称" "")
-    if [ -n "$egress" ]; then
-        if [ -d "/sys/class/net/${egress}" ]; then
-            print_info "已设置出口网卡: ${egress}"
-        else
-            print_warning "网卡 ${egress} 不存在，将跳过配置"
-            egress=""
-        fi
-    else
-        print_info "跳过出口网卡配置（使用默认路由）"
-    fi
-
-    # 混淆
-    local obfs="" obfs_host=""
-    echo ""
-    print_title "混淆配置 (可选)"
-    echo -e "${CYAN}说明:${NC}"
-    echo "  • 混淆用于隐藏协议特征"
-    echo "  • http 混淆所有版本支持"
-    echo "  • tls 混淆仅 v3 及以下版本支持"
-    echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
-    echo ""
-    if [ "$install_method" = "1" ]; then
-        local version_without_v=$(format_version_without_v "$version")
-        local supported_obfs=$(get_supported_obfs "$version_without_v")
-        echo -e "当前版本支持的混淆: ${CYAN}${supported_obfs}${NC}"
-    fi
-    enable_obfs=$(read_yes_no "是否启用混淆" "n")
-    if [[ "$enable_obfs" =~ ^[Yy]$ ]]; then
-        local version_without_v=$(format_version_without_v "$version")
-        local major_ver=$(get_major_version "$version_without_v")
-        if [ "$install_method" = "1" ] && [ -n "$major_ver" ] && [ "$major_ver" -le 3 ] 2>/dev/null; then
-            echo "请选择混淆模式:"
-            echo "  1) http"
-            echo "  2) tls"
-            obfs_choice=$(read_with_default "请选择" "1")
-            case $obfs_choice in
-                1) obfs="http" ;;
-                2) obfs="tls" ;;
-                *) obfs="http" ;;
-            esac
-        else
-            obfs="http"
-            print_info "使用 http 混淆"
-        fi
-        obfs_host=$(read_with_default "请输入混淆域名 (例如: bing.com)" "")
-        if [ -z "$obfs_host" ]; then
-            print_warning "未设置混淆域名，将跳过混淆配置"
-            obfs=""
-        else
-            print_info "已启用混淆: ${obfs} -> ${obfs_host}"
-        fi
-    fi
+    # 使用全局变量
+    local port="$cfg_port" psk="$cfg_psk" ipv6="$cfg_ipv6" dns="$cfg_dns" egress="$cfg_egress" obfs="$cfg_obfs" host="$cfg_host"
 
     # 摘要
     echo ""
@@ -782,8 +782,8 @@ install_wizard() {
     echo -e "IPv6: ${CYAN}${ipv6}${NC}"
     [ -n "$dns" ] && echo -e "DNS: ${CYAN}${dns}${NC}"
     [ -n "$egress" ] && echo -e "出口网卡: ${CYAN}${egress}${NC}"
-    if [ -n "$obfs" ] && [ -n "$obfs_host" ]; then
-        echo -e "混淆: ${CYAN}${obfs} -> ${obfs_host}${NC}"
+    if [ -n "$obfs" ] && [ -n "$host" ]; then
+        echo -e "混淆: ${CYAN}${obfs} -> ${host}${NC}"
     else
         echo -e "混淆: ${YELLOW}未启用${NC}"
     fi
@@ -797,9 +797,9 @@ install_wizard() {
     fi
 
     if [ "$install_method" = "1" ]; then
-        install_binary "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$obfs_host"
+        install_binary "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host"
     else
-        install_docker "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$obfs_host" "$network_mode" "$docker_user"
+        install_docker "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host" "$network_mode" "$docker_user"
     fi
 }
 
@@ -807,7 +807,7 @@ view_config() {
     print_title "Snell 配置信息"
     if [ -f "${SNELL_CONFIG_FILE}" ]; then
         local ver=$(get_installed_version)
-        local port=$(grep -oP 'listen = :::\K\d+' "${SNELL_CONFIG_FILE}" 2>/dev/null || echo "")
+        local port=$(grep -oP 'listen = ::0:\K\d+' "${SNELL_CONFIG_FILE}" 2>/dev/null || echo "")
         local psk=$(grep 'psk = ' "${SNELL_CONFIG_FILE}" | cut -d'=' -f2 | xargs)
         local ipv6=$(grep 'ipv6 = ' "${SNELL_CONFIG_FILE}" | cut -d'=' -f2 | xargs)
         local dns=$(grep 'dns = ' "${SNELL_CONFIG_FILE}" | cut -d'=' -f2- | xargs)
@@ -818,8 +818,8 @@ view_config() {
     elif docker ps | grep -q snell 2>/dev/null; then
         local config=$(docker exec snell cat /snell/snell.conf 2>/dev/null)
         if [ -n "$config" ]; then
-            local ver=$(docker exec snell ./snell-server -v 2>/dev/null | grep -oP '\bv?\K\d+\.\d+\.\d+[a-z0-9]*' | head -1)
-            local port=$(echo "$config" | grep -oP 'listen = :::\K\d+')
+            local ver=$(docker exec snell ./snell-server -v 2>/dev/null | grep -oP 'v\d+\.\d+\.\d+[a-z0-9]*' | sed 's/^v//')
+            local port=$(echo "$config" | grep -oP 'listen = ::0:\K\d+')
             local psk=$(echo "$config" | grep 'psk = ' | cut -d'=' -f2 | xargs)
             local ipv6=$(echo "$config" | grep 'ipv6 = ' | cut -d'=' -f2 | xargs)
             local dns=$(echo "$config" | grep 'dns = ' | cut -d'=' -f2- | xargs)
@@ -845,7 +845,7 @@ show_status() {
         echo -e "${BLUE}服务状态:${NC}"; systemctl status snell --no-pager -l
         echo -e "\n${BLUE}进程信息:${NC}"; ps aux | grep snell-server | grep -v grep
         echo -e "\n${BLUE}端口监听:${NC}"
-        local port=$(grep -oP 'listen = :::\K\d+' "${SNELL_CONFIG_FILE}" 2>/dev/null | head -1)
+        local port=$(grep -oP 'listen = ::0:\K\d+' "${SNELL_CONFIG_FILE}" 2>/dev/null | head -1)
         [ -n "$port" ] && ss -tlnp 2>/dev/null | grep "$port" || netstat -tlnp 2>/dev/null | grep "$port" || echo "未检测到监听"
     elif docker ps | grep -q snell 2>/dev/null; then
         echo -e "${BLUE}容器状态:${NC}"; docker ps --filter name=snell
@@ -939,15 +939,42 @@ update_snell() {
 
 change_config() {
     print_title "修改 Snell 配置"
-    if [ -f "${SNELL_CONFIG_FILE}" ]; then
-        print_info "编辑配置文件: ${SNELL_CONFIG_FILE}"; sleep 1; ${EDITOR:-vi} "${SNELL_CONFIG_FILE}"
-        if [[ "$(read_yes_no "是否重启 Snell" "n")" =~ ^[Yy]$ ]]; then systemctl restart snell; print_info "Snell 已重启"; view_config; fi
-    elif [ -f "${DOCKER_COMPOSE_FILE}" ]; then
-        print_info "编辑配置文件: ${DOCKER_COMPOSE_FILE}"; sleep 1; ${EDITOR:-vi} "${DOCKER_COMPOSE_FILE}"
-        if [[ "$(read_yes_no "是否重启容器" "n")" =~ ^[Yy]$ ]]; then cd "${DOCKER_COMPOSE_DIR}"; docker-compose restart; print_info "容器已重启"; view_config; fi
+
+    local install_method version
+    if [ -f "${SNELL_INSTALL_DIR}/snell-server" ]; then
+        install_method="1"   # 二进制
+        version=$(get_installed_version)
+    elif docker ps -a | grep -q snell; then
+        install_method="2"
+        version=$(docker exec snell ./snell-server -v 2>/dev/null | grep -oP 'v\d+\.\d+\.\d+[a-z0-9]*' | sed 's/^v//')
     else
-        print_error "未找到配置文件"; return 1
+        print_error "未检测到 Snell 安装"
+        return 1
     fi
+
+    [ -z "$version" ] && version="0.0.0"
+
+    # 交互式收集新配置
+    collect_config "$version" "$install_method"
+
+    # 应用配置
+    if [ "$install_method" = "1" ]; then
+        create_binary_config "$version" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_egress" "$cfg_obfs" "$cfg_host"
+        systemctl restart snell
+        print_info "Snell 已重启并应用新配置"
+    else
+        # Docker: 重新生成 compose 文件并 up -d
+        local network_mode=$(grep "network_mode:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}')
+        [ -z "$network_mode" ] && network_mode="host"
+        local docker_user=$(grep "user:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}' | sed 's/"//g')
+        local current_image=$(grep "image:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}')
+        # 使用 install_docker 函数（内部会拉取镜像但已有镜像不会重复拉）
+        install_docker "$version" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_egress" "$cfg_obfs" "$cfg_host" "$network_mode" "$docker_user"
+        print_info "Docker 容器已重启并应用新配置"
+    fi
+
+    sleep 1
+    view_config
 }
 
 uninstall_snell() {
@@ -994,19 +1021,12 @@ show_menu() {
     echo -e "  ${RED}0${NC}) 退出"
     echo ""
     echo "────────────────────────────────────────"
-    if [ -f "${SNELL_INSTALL_DIR}/snell-server" ]; then
-        local ver=$(get_installed_version)
-        if systemctl is-active snell &>/dev/null; then
-            echo -e "状态: ${GREEN}● 二进制已安装 (v${ver}) | 运行中${NC}"
-        else
-            echo -e "状态: ${YELLOW}● 二进制已安装 (v${ver}) | 未运行${NC}"
-        fi
-    elif docker ps -a | grep -q snell 2>/dev/null; then
-        if docker ps | grep -q snell; then
-            echo -e "状态: ${GREEN}● Docker 已安装 | 运行中${NC}"
-        else
-            echo -e "状态: ${YELLOW}● Docker 已安装 | 已停止${NC}"
-        fi
+    if systemctl is-active snell &>/dev/null; then
+        echo -e "状态: ${GREEN}运行中${NC}"
+    elif docker ps | grep -q snell 2>/dev/null; then
+        echo -e "状态: ${GREEN}运行中${NC}"
+    elif [ -f "${SNELL_INSTALL_DIR}/snell-server" ] || docker ps -a | grep -q snell 2>/dev/null; then
+        echo -e "状态: ${YELLOW}未运行${NC}"
     else
         echo -e "状态: ${RED}○ 未安装${NC}"
     fi
