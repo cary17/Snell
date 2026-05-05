@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Snell 一键管理脚本 (v2.6)
-# 修复 GitHub 下载地址拼接、虚拟网卡检测、端口/版本提取、配置交互化
+# Snell 一键管理脚本 (v2.7)
+# 修复 GitHub 下载路径、虚拟网卡过滤、交互式配置修改
 
 set -e
 
@@ -75,42 +75,143 @@ format_version_without_v() {
     echo "${v#v}"
 }
 
+# 下载相关 - 使用和之前正常版本一致的逻辑
+download_snell_binary() {
+    local version=$1
+    local arch=$(get_arch)
+    local version_with_v=$(format_version_with_v "$version")
+    local version_without_v=$(format_version_without_v "$version")
+    
+    # 先尝试官方源下载
+    local official_url="https://dl.nssurge.com/snell/snell-server-${version_with_v}-linux-${arch}.zip"
+    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
+    
+    print_info "正在下载 Snell ${version_with_v} for ${arch}..."
+    
+    rm -rf "${TMP_DIR}"
+    mkdir -p "${TMP_DIR}"
+    cd "${TMP_DIR}"
+    
+    # 先尝试官方源
+    if wget -q --show-progress --timeout=30 --tries=3 "$official_url" -O snell.zip 2>/dev/null; then
+        print_success "从官方源下载成功"
+    # 官方源失败则尝试 GitHub
+    elif wget -q --show-progress --timeout=30 --tries=3 "$github_url" -O snell.zip 2>/dev/null; then
+        print_success "从 GitHub 备份源下载成功"
+    else
+        print_error "下载失败"
+        cd / && rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    
+    # 验证并解压
+    if ! unzip -t snell.zip &>/dev/null; then
+        print_error "下载的文件损坏"
+        cd / && rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    
+    print_info "正在解压..."
+    unzip -q snell.zip
+    
+    if [ ! -f "snell-server" ]; then
+        print_error "解压后未找到 snell-server 文件"
+        cd / && rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    
+    mv snell-server "${SNELL_INSTALL_DIR}/snell-server"
+    chmod +x "${SNELL_INSTALL_DIR}/snell-server"
+    
+    cd /
+    rm -rf "${TMP_DIR}"
+    
+    print_success "二进制安装完成"
+    return 0
+}
+
 check_version_exists() {
-    local ver="$1" arch=$(get_arch)
-    local v_with=$(format_version_with_v "$ver")
-    # 检查官方源
-    curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null && return 0
-    # 检查 GitHub 备份源（直接使用完整版本号作为目录名）
-    curl --head -sf --output /dev/null "${GITHUB_BASE}/${v_with}/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null && return 0
+    local version=$1
+    local arch=$(get_arch)
+    local version_with_v=$(format_version_with_v "$version")
+    local version_without_v=$(format_version_without_v "$version")
+    
+    # 尝试官方源
+    local official_url="https://dl.nssurge.com/snell/snell-server-${version_with_v}-linux-${arch}.zip"
+    if curl --head --silent --fail --output /dev/null "$official_url" 2>/dev/null; then
+        return 0
+    fi
+    
+    # 尝试 GitHub 备份源
+    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
+    if curl --head --silent --fail --output /dev/null "$github_url" 2>/dev/null; then
+        return 0
+    fi
+    
     return 1
 }
 
 get_version_url() {
-    local ver="$1" arch=$(get_arch)
-    local v_with=$(format_version_with_v "$ver")
-    # 优先使用官方源
-    if curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null; then
-        echo "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip"
-    else
-        # 使用 GitHub 备份源（目录名和文件名都使用完整带 v 的版本号）
-        echo "${GITHUB_BASE}/${v_with}/snell-server-${v_with}-linux-${arch}.zip"
+    local version=$1
+    local arch=$(get_arch)
+    local version_with_v=$(format_version_with_v "$version")
+    local version_without_v=$(format_version_without_v "$version")
+    
+    # 优先返回官方源
+    local official_url="https://dl.nssurge.com/snell/snell-server-${version_with_v}-linux-${arch}.zip"
+    if curl --head --silent --fail --output /dev/null "$official_url" 2>/dev/null; then
+        echo "$official_url"
+        return 0
     fi
+    
+    # 返回 GitHub 备份源
+    local github_url="${GITHUB_BASE}/v${version_without_v}/snell-server-${version_with_v}-linux-${arch}.zip"
+    echo "$github_url"
+    return 0
 }
 
 get_official_latest_version() {
-    local v; v=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell 2>/dev/null | grep -oP 'snell-server-v\K\d+\.\d+\.\d+' | head -1)
-    [ -z "$v" ] && v=$(curl -fsSL "${GITHUB_API}" 2>/dev/null | grep -oP '"name": "v\K\d+\.\d+\.\d+"' | sed 's/"//g' | sort -V | tail -1)
-    [ -n "$v" ] && clean_version "$v" || echo ""
+    local version=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell 2>/dev/null \
+        | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' \
+        | head -1)
+    
+    if [ -z "$version" ]; then
+        version=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
+            | grep -oP '"name": "v\K[0-9]+\.[0-9]+\.[0-9]+"' \
+            | sed 's/"//g' \
+            | sort -V | tail -n1)
+    fi
+    
+    echo "$version"
 }
 
 get_major_version() {
-    local v; v=$(format_version_without_v "$1")
-    echo "$v" | grep -oP '^\d+' || echo "0"
+    local version=$1
+    local version_without_v=$(format_version_without_v "$version")
+    echo "$version_without_v" | grep -oP '^[0-9]+' || echo "0"
 }
 
 resolve_major_version() {
-    case $1 in
-        3|4|5) curl -fsSL "${GITHUB_API}" 2>/dev/null | grep -oP '"name": "v\K'"$1"'\.[0-9]+\.[0-9]+"' | sed 's/"//g' | sort -V | tail -1 ;;
+    local input=$1
+    case $input in
+        3)
+            curl -fsSL "${GITHUB_API}" 2>/dev/null \
+                | grep -oP '"name": "v\K3\.[0-9]+\.[0-9]+"' \
+                | sed 's/"//g' \
+                | sort -V | tail -n1
+            ;;
+        4)
+            curl -fsSL "${GITHUB_API}" 2>/dev/null \
+                | grep -oP '"name": "v\K4\.[0-9]+\.[0-9]+"' \
+                | sed 's/"//g' \
+                | sort -V | tail -n1
+            ;;
+        5)
+            curl -fsSL "${GITHUB_API}" 2>/dev/null \
+                | grep -oP '"name": "v\K5\.[0-9]+\.[0-9]+"' \
+                | sed 's/"//g' \
+                | sort -V | tail -n1
+            ;;
         *) return 1 ;;
     esac
 }
@@ -124,14 +225,30 @@ get_installed_version() {
 }
 
 check_obfs_support() {
-    local major=$(get_major_version "$1")
-    [ -z "$major" ] && return 1
-    [ "$2" = "tls" ] && [ "$major" -gt 3 ] 2>/dev/null && return 1
+    local version=$1
+    local obfs_type=$2
+    local major_version=$(get_major_version "$version")
+    
+    if [ -z "$major_version" ] || [ "$major_version" -eq 0 ] 2>/dev/null; then
+        [ "$obfs_type" = "http" ] && return 0
+        return 1
+    fi
+    
+    if [ "$obfs_type" = "tls" ] && [ "$major_version" -gt 3 ] 2>/dev/null; then
+        return 1
+    fi
     return 0
 }
+
 get_supported_obfs() {
-    local major=$(get_major_version "$1")
-    [ "$major" -le 3 ] 2>/dev/null && echo "http/tls" || echo "http"
+    local version=$1
+    local major_version=$(get_major_version "$version")
+    
+    if [ -z "$major_version" ] || [ "$major_version" -le 3 ] 2>/dev/null; then
+        echo "http/tls"
+    else
+        echo "http"
+    fi
 }
 
 is_private_ipv4() {
@@ -249,19 +366,12 @@ generate_psk() {
     fi
 }
 
-# 检测物理网络接口（排除虚拟接口）
 detect_interface() {
-    # 获取默认路由接口
     local default_iface=$(ip route 2>/dev/null | grep '^default' | awk '{print $5}' | head -1)
-    
-    # 检查是否为有效物理接口
     if [ -n "$default_iface" ] && [ -d "/sys/class/net/$default_iface" ] && [[ ! "$default_iface" =~ ^(lo|docker|br-|veth|tun|tap) ]]; then
         echo "$default_iface"
         return 0
     fi
-    
-    # 尝试获取第一个非虚拟、非回环接口
-    local iface
     for iface in $(ls /sys/class/net 2>/dev/null); do
         [[ "$iface" =~ ^(lo|docker|br-|veth|tun|tap) ]] && continue
         if [ -d "/sys/class/net/$iface" ] && ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
@@ -269,26 +379,7 @@ detect_interface() {
             return 0
         fi
     done
-    
-    # 回退到任意非回环接口
-    ls /sys/class/net 2>/dev/null | grep -v lo | head -1
-}
-
-download_snell_binary() {
-    local ver=$(clean_version "$1") arch=$(get_arch) url=$(get_version_url "$ver")
-    local v_with=$(format_version_with_v "$ver")
-    print_info "正在下载 Snell ${v_with} for ${arch}..."
-    print_info "下载地址: ${url}"
-    rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"; cd "$TMP_DIR"
-    wget -q --show-progress --timeout=30 --tries=3 "$url" -O snell.zip || { print_error "下载失败"; cd /; rm -rf "$TMP_DIR"; return 1; }
-    if ! unzip -t snell.zip &>/dev/null; then print_error "下载的文件损坏"; cd /; rm -rf "$TMP_DIR"; return 1; fi
-    print_info "正在解压..."
-    unzip -q snell.zip
-    [ ! -f snell-server ] && { print_error "解压后未找到 snell-server 文件"; cd /; rm -rf "$TMP_DIR"; return 1; }
-    mv snell-server "${SNELL_INSTALL_DIR}/snell-server"
-    chmod +x "${SNELL_INSTALL_DIR}/snell-server"
-    cd /; rm -rf "$TMP_DIR"
-    print_success "二进制安装完成"
+    ls /sys/class/net 2>/dev/null | grep -vE '^(lo|docker|br-|veth|tun|tap)$' | head -1
 }
 
 create_system_user() {
@@ -511,7 +602,6 @@ show_version_menu() {
     echo "$selected"
 }
 
-# 交互式收集配置
 collect_config() {
     local version="$1" install_method="$2"
 
@@ -593,11 +683,8 @@ collect_config() {
     echo "  • 用于指定 Snell 服务使用的网络出口接口"
     echo "  • 可用的网络接口列表:"
     if [ -d "/sys/class/net" ]; then
-        # 排除虚拟接口
-        ls /sys/class/net | grep -vE '^(lo|docker|br-|veth|tun|tap)' | sed 's/^/    - /'
-        if ls /sys/class/net | grep -vE '^(lo|docker|br-|veth|tun|tap)' 2>/dev/null | grep -q .; then
-            :
-        else
+        ls /sys/class/net | grep -vE '^(lo|docker|br-|veth|tun|tap)$' | sed 's/^/    - /'
+        if ! ls /sys/class/net 2>/dev/null | grep -vE '^(lo|docker|br-|veth|tun|tap)$' | grep -q .; then
             echo "    (无可用的物理网络接口)"
         fi
     else
@@ -670,7 +757,7 @@ collect_config() {
 }
 
 install_binary() {
-    local version=$(clean_version "$1") port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8"
+    local version="$1" port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8"
     print_title "二进制安装 Snell"
     install_dependencies
     create_system_user
@@ -684,7 +771,7 @@ install_binary() {
 }
 
 install_docker() {
-    local version=$(clean_version "$1") port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8" network_mode="$9" docker_user="${10}"
+    local version="$1" port="$2" psk="$3" ipv6="$4" dns="$5" egress="$6" obfs="$7" host="$8" network_mode="$9" docker_user="${10}"
     print_title "Docker 方式安装 Snell"
 
     if ! command -v docker &>/dev/null; then
