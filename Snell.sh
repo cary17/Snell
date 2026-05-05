@@ -47,6 +47,44 @@ print_success() {
     echo -e "${GREEN}✓${NC} $1"
 }
 
+# 读取带默认值的输入
+read_with_default() {
+    local prompt=$1
+    local default=$2
+    local result
+    
+    if [ -n "$default" ]; then
+        prompt="${prompt} [${default}]: "
+    else
+        prompt="${prompt}: "
+    fi
+    
+    read -p "$prompt" result
+    if [ -z "$result" ] && [ -n "$default" ]; then
+        result="$default"
+    fi
+    echo "$result"
+}
+
+# 读取 yes/no 带默认值
+read_yes_no() {
+    local prompt=$1
+    local default=$2
+    local result
+    
+    if [ "$default" = "y" ] || [ "$default" = "Y" ]; then
+        prompt="${prompt} [Y/n]: "
+    else
+        prompt="${prompt} [y/N]: "
+    fi
+    
+    read -p "$prompt" result
+    if [ -z "$result" ]; then
+        result="$default"
+    fi
+    echo "$result"
+}
+
 # 格式化版本号（确保带 v 前缀）
 format_version_with_v() {
     local version=$1
@@ -587,7 +625,6 @@ install_docker() {
         docker_image=$(select_best_docker_registry)
         image_tag="latest"
     else
-        # 确保版本号带 v 前缀作为镜像标签
         local version_with_v=$(format_version_with_v "$version")
         docker_image=$(select_best_docker_registry)
         image_tag="${version_with_v}"
@@ -663,34 +700,46 @@ EOF
 install_wizard() {
     print_title "Snell 安装向导"
     
+    # 安装方式选择（默认二进制）
     echo "请选择安装方式："
-    echo "1) 二进制安装 (systemd，性能最优)"
-    echo "2) Docker 安装 (容器化，便于管理)"
-    read -p "请选择 [1-2]: " install_method
+    echo "  1) 二进制安装 (systemd，性能最优) 【默认】"
+    echo "  2) Docker 安装 (容器化，便于管理)"
+    install_method=$(read_with_default "请选择" "1")
     
+    # 版本选择（默认最新）
     echo ""
     echo "选择版本："
-    echo "1) 最新版本 (推荐)"
-    echo "2) 指定版本"
-    read -p "请选择 [1-2]: " ver_choice
+    echo "  1) 最新版本 (推荐) 【默认】"
+    echo "  2) 指定版本"
+    ver_choice=$(read_with_default "请选择" "1")
     
     local version
     if [ "$ver_choice" = "1" ]; then
         if [ "$install_method" = "1" ]; then
             version=$(get_latest_version) || return 1
+            print_info "将安装最新版本: v${version}"
         else
             version="latest"
-            print_info "将安装最新 Docker 镜像"
+            print_info "将安装最新 Docker 镜像: latest"
         fi
     else
         if [ "$install_method" = "1" ]; then
-            read -p "请输入版本号 (例如: 5.0.1): " version
+            version=$(read_with_default "请输入版本号 (例如: 5.0.1)" "")
+            if [ -z "$version" ]; then
+                print_error "版本号不能为空"
+                return 1
+            fi
             version=$(format_version_without_v "$version")
+            print_info "将安装版本: v${version}"
         else
-            read -p "请输入版本号 (例如: 5.0.1): " version
+            version=$(read_with_default "请输入版本号 (例如: 5.0.1)" "")
+            if [ -z "$version" ]; then
+                print_error "版本号不能为空"
+                return 1
+            fi
             version=$(format_version_without_v "$version")
+            print_info "将安装版本: v${version}"
         fi
-        print_info "将安装版本: v${version}"
     fi
     
     local network_mode="host"
@@ -699,9 +748,9 @@ install_wizard() {
         echo ""
         print_title "Docker 网络配置"
         echo "请选择网络模式："
-        echo "1) host 模式 (默认，性能最佳)"
-        echo "2) bridge 模式 (需要映射端口)"
-        read -p "请选择 [1-2]: " network_choice
+        echo "  1) host 模式 (默认，性能最佳) 【默认】"
+        echo "  2) bridge 模式 (需要映射端口)"
+        network_choice=$(read_with_default "请选择" "1")
         if [ "$network_choice" = "2" ]; then
             network_mode="bridge"
             print_info "将使用 bridge 模式"
@@ -711,33 +760,38 @@ install_wizard() {
         fi
         
         echo ""
-        read -p "是否指定运行用户？[y/N]: " set_user
+        set_user=$(read_yes_no "是否指定运行用户" "n")
         if [[ "$set_user" =~ ^[Yy]$ ]]; then
-            read -p "请输入用户 ID 或用户名: " docker_user
-            print_info "将使用用户: ${docker_user}"
+            docker_user=$(read_with_default "请输入用户 ID 或用户名" "")
+            if [ -n "$docker_user" ]; then
+                print_info "将使用用户: ${docker_user}"
+            fi
         fi
     fi
     
+    # 端口配置
     echo ""
     print_title "端口配置"
+    
+    # 根据安装方式和网络模式决定默认行为
     if [ "$install_method" = "2" ] && [ "$network_mode" = "bridge" ]; then
         print_info "bridge 模式下需要指定端口"
         manual_port="y"
     else
-        read -p "是否手动指定端口？[y/N]: " manual_port
+        manual_port=$(read_yes_no "是否手动指定端口" "n")
     fi
     
     local port
     if [[ "$manual_port" =~ ^[Yy]$ ]]; then
         while true; do
-            read -p "请输入端口号 (10000-65535): " port
+            port=$(read_with_default "请输入端口号 (10000-65535)" "")
             if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 10000 ] && [ "$port" -le 65535 ]; then
                 if is_port_excluded "$port"; then
                     print_warning "端口 ${port} 是常用服务端口"
-                    read -p "是否继续？[y/N]: " continue_anyway
+                    continue_anyway=$(read_yes_no "是否继续" "n")
                     [[ "$continue_anyway" =~ ^[Yy]$ ]] && break
                 elif is_port_used "$port"; then
-                    print_warning "端口 ${port} 已被占用"
+                    print_warning "端口 ${port} 已被占用，请重新输入"
                 else
                     break
                 fi
@@ -750,12 +804,13 @@ install_wizard() {
         print_success "已自动生成随机端口: ${port}"
     fi
     
+    # PSK 配置
     echo ""
     print_title "密码配置"
-    read -p "是否手动设置密码？[y/N]: " manual_psk
+    manual_psk=$(read_yes_no "是否手动设置密码" "n")
     local psk
     if [[ "$manual_psk" =~ ^[Yy]$ ]]; then
-        read -p "请输入密码: " psk
+        psk=$(read_with_default "请输入密码" "")
         if [ -z "$psk" ]; then
             psk=$(generate_psk)
             print_success "已自动生成密码: ${psk}"
@@ -765,13 +820,16 @@ install_wizard() {
         print_success "已自动生成密码: ${psk}"
     fi
     
+    # IPv6 配置（默认 false）
     echo ""
     print_title "IPv6 配置"
-    read -p "是否启用 IPv6？[y/N]: " ipv6_choice
+    ipv6_choice=$(read_yes_no "是否启用 IPv6" "n")
     local ipv6="false"
     if [[ "$ipv6_choice" =~ ^[Yy]$ ]]; then
         ipv6="true"
         print_info "已启用 IPv6"
+    else
+        print_info "IPv6 保持关闭（默认）"
     fi
     
     # DNS 配置
@@ -783,7 +841,7 @@ install_wizard() {
     echo "  • 支持 IPv4 和 IPv6 DNS 服务器"
     echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
     echo ""
-    read -p "请输入 DNS 服务器: " dns
+    dns=$(read_with_default "请输入 DNS 服务器" "")
     if [ -n "$dns" ]; then
         print_info "已设置 DNS: ${dns}"
     else
@@ -802,7 +860,7 @@ install_wizard() {
     echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
     echo ""
     echo -e "检测到的默认网卡: ${YELLOW}${default_iface}${NC}"
-    read -p "请输入出口网卡名称: " egress
+    egress=$(read_with_default "请输入出口网卡名称" "")
     if [ -n "$egress" ]; then
         if [ -d "/sys/class/net/${egress}" ]; then
             print_info "已设置出口网卡: ${egress}"
@@ -817,8 +875,6 @@ install_wizard() {
     # OBFS 混淆配置
     echo ""
     print_title "混淆配置 (可选)"
-    local obfs=""
-    local obfs_host=""
     
     if [ "$install_method" = "1" ]; then
         local version_without_v=$(format_version_without_v "$version")
@@ -828,14 +884,16 @@ install_wizard() {
     echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
     echo ""
     
-    read -p "是否启用混淆？[y/N]: " enable_obfs
+    local obfs=""
+    local obfs_host=""
+    enable_obfs=$(read_yes_no "是否启用混淆" "n")
     if [[ "$enable_obfs" =~ ^[Yy]$ ]]; then
         local version_without_v=$(format_version_without_v "$version")
         if [ "$install_method" = "1" ] && [ "$(get_major_version "$version_without_v")" -le 3 ]; then
             echo "请选择混淆模式:"
-            echo "1) http"
-            echo "2) tls"
-            read -p "请选择 [1-2]: " obfs_choice
+            echo "  1) http"
+            echo "  2) tls"
+            obfs_choice=$(read_with_default "请选择" "1")
             case $obfs_choice in
                 1) obfs="http" ;;
                 2) obfs="tls" ;;
@@ -846,7 +904,7 @@ install_wizard() {
             print_info "使用 http 混淆"
         fi
         
-        read -p "请输入混淆域名 (例如: bing.com): " obfs_host
+        obfs_host=$(read_with_default "请输入混淆域名 (例如: bing.com)" "")
         if [ -z "$obfs_host" ]; then
             print_warning "未设置混淆域名，将跳过混淆配置"
             obfs=""
@@ -877,7 +935,7 @@ install_wizard() {
     fi
     echo ""
     
-    read -p "确认安装？[y/N]: " confirm
+    confirm=$(read_yes_no "确认安装" "n")
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         print_info "取消安装"
         return 0
@@ -1022,7 +1080,7 @@ update_snell() {
             return 0
         fi
         
-        read -p "是否更新到 v${latest_version}？[y/N]: " confirm
+        confirm=$(read_yes_no "是否更新到 v${latest_version}" "n")
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             return 0
         fi
@@ -1084,7 +1142,7 @@ update_snell() {
             local latest_version=$(get_latest_version)
             local latest_version_with_v=$(format_version_with_v "$latest_version")
             if [ -n "$latest_version" ] && [ "$current_tag" != "$latest_version_with_v" ]; then
-                read -p "发现新版本 ${latest_version_with_v}，是否更新？[y/N]: " confirm
+                confirm=$(read_yes_no "发现新版本 ${latest_version_with_v}，是否更新" "n")
                 if [[ "$confirm" =~ ^[Yy]$ ]]; then
                     local new_image=$(echo "$current_image" | sed "s/${current_tag}/${latest_version_with_v}/")
                     sed -i "s|image: ${current_image}|image: ${new_image}|g" "${DOCKER_COMPOSE_FILE}"
@@ -1111,7 +1169,7 @@ change_config() {
         print_info "编辑配置文件: ${SNELL_CONFIG_FILE}"
         sleep 1
         ${EDITOR:-vi} "${SNELL_CONFIG_FILE}"
-        read -p "是否重启 Snell？[y/N]: " restart
+        restart=$(read_yes_no "是否重启 Snell" "n")
         if [[ "$restart" =~ ^[Yy]$ ]]; then
             systemctl restart snell
             print_info "Snell 已重启"
@@ -1121,7 +1179,7 @@ change_config() {
         print_info "编辑配置文件: ${DOCKER_COMPOSE_FILE}"
         sleep 1
         ${EDITOR:-vi} "${DOCKER_COMPOSE_FILE}"
-        read -p "是否重启容器？[y/N]: " restart
+        restart=$(read_yes_no "是否重启容器" "n")
         if [[ "$restart" =~ ^[Yy]$ ]]; then
             cd "${DOCKER_COMPOSE_DIR}"
             docker-compose restart
@@ -1139,7 +1197,7 @@ uninstall_snell() {
     print_title "彻底卸载 Snell"
     
     echo -e "${RED}警告：此操作将删除 Snell 及其所有数据！${NC}"
-    read -p "确认卸载？[y/N]: " confirm
+    confirm=$(read_yes_no "确认卸载" "n")
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         print_info "取消卸载"
         return 0
@@ -1152,10 +1210,10 @@ uninstall_snell() {
         rm -f "${SNELL_INSTALL_DIR}/snell-server"
         rm -f "${SNELL_INSTALL_DIR}/snell-server.old"
         
-        read -p "是否删除配置文件？[y/N]: " del_config
+        del_config=$(read_yes_no "是否删除配置文件" "n")
         [[ "$del_config" =~ ^[Yy]$ ]] && rm -rf "${SNELL_CONFIG_DIR}"
         
-        read -p "是否删除系统用户？[y/N]: " del_user
+        del_user=$(read_yes_no "是否删除系统用户" "n")
         [[ "$del_user" =~ ^[Yy]$ ]] && userdel ${SNELL_USER} 2>/dev/null
         
         systemctl daemon-reload
@@ -1166,7 +1224,7 @@ uninstall_snell() {
         cd "${DOCKER_COMPOSE_DIR}" 2>/dev/null
         docker-compose down -v
         
-        read -p "是否删除镜像？[y/N]: " del_image
+        del_image=$(read_yes_no "是否删除镜像" "n")
         if [[ "$del_image" =~ ^[Yy]$ ]]; then
             local snell_images=$(docker images | grep "snell" | awk '{print $3}')
             if [ -n "$snell_images" ]; then
@@ -1175,7 +1233,7 @@ uninstall_snell() {
             fi
         fi
         
-        read -p "是否删除配置文件？[y/N]: " del_compose
+        del_compose=$(read_yes_no "是否删除配置文件" "n")
         if [[ "$del_compose" =~ ^[Yy]$ ]]; then
             rm -rf "${DOCKER_COMPOSE_DIR}"
             print_info "已删除配置文件"
@@ -1235,7 +1293,7 @@ main() {
     
     while true; do
         show_menu
-        read -p "请选择 [0-9]: " choice
+        choice=$(read_with_default "请选择" "")
         
         case $choice in
             1) install_wizard ;;
@@ -1251,11 +1309,17 @@ main() {
                 print_info "感谢使用，再见！"
                 exit 0
                 ;;
-            *) print_warning "无效选择，请重新输入" ;;
+            *) 
+                if [ -n "$choice" ]; then
+                    print_warning "无效选择，请重新输入"
+                fi
+                ;;
         esac
         
-        echo ""
-        read -p "按回车键继续..."
+        if [ "$choice" != "0" ] && [ -n "$choice" ]; then
+            echo ""
+            read -p "按回车键继续..."
+        fi
     done
 }
 
