@@ -39,20 +39,20 @@ EXCLUDED_PORTS=(
     22 23 25 53 80 110 111 135 139 143 443 445 993 995 1723 3306 3389 5432 5900 6379 8080 8443 8888 9200 27017
 )
 
-# 打印信息函数
-print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+# 打印信息函数 (全部输出到 stderr，避免被命令替换捕获)
+print_info() { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1" >&2; }
 print_title() {
-    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  $1${NC}"
-    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}" >&2
+    echo -e "${CYAN}  $1${NC}" >&2
+    echo -e "${CYAN}════════════════════════════════════════════════════════${NC}" >&2
 }
 print_success() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${GREEN}✓${NC} $1" >&2
 }
 
-# 读取带默认值的输入
+# 读取带默认值的输入 (返回用户输入，输出到 stdout)
 read_with_default() {
     local prompt=$1
     local default=$2
@@ -71,7 +71,7 @@ read_with_default() {
     echo "$result"
 }
 
-# 读取 yes/no 带默认值
+# 读取 yes/no 带默认值 (返回 y/n，输出到 stdout)
 read_yes_no() {
     local prompt=$1
     local default=$2
@@ -93,7 +93,6 @@ read_yes_no() {
 # 格式化版本号（确保带 v 前缀）
 format_version_with_v() {
     local version=$1
-    # 去除可能的多余空格和换行
     version=$(echo "$version" | tr -d '[:space:]')
     if [[ ! "$version" =~ ^v ]]; then
         echo "v${version}"
@@ -114,7 +113,6 @@ check_version_exists() {
     local version=$1
     local arch=$(get_arch)
     
-    # 确保版本号带 v 前缀
     local version_with_v=$(format_version_with_v "$version")
     local version_without_v=$(format_version_without_v "$version")
     
@@ -175,7 +173,6 @@ get_official_latest_version() {
 get_major_version() {
     local version=$1
     local version_without_v=$(format_version_without_v "$version")
-    # 只提取第一个点之前的数字，忽略字母
     echo "$version_without_v" | grep -oP '^[0-9]+' || echo "0"
 }
 
@@ -185,7 +182,6 @@ resolve_major_version() {
     
     case $input in
         3)
-            # 获取 v3.x 的最新稳定版
             local v3_version=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
                 | grep -oP '"name": "v\K3\.[0-9]+\.[0-9]+"' \
                 | sed 's/"//g' \
@@ -212,13 +208,12 @@ resolve_major_version() {
     esac
 }
 
-# 检查混淆是否支持（修复整数比较问题）
+# 检查混淆是否支持
 check_obfs_support() {
     local version=$1
     local obfs_type=$2
     local major_version=$(get_major_version "$version")
     
-    # 如果无法提取大版本号，默认只支持 http
     if [ -z "$major_version" ] || [ "$major_version" -eq 0 ] 2>/dev/null; then
         [ "$obfs_type" = "http" ] && return 0
         return 1
@@ -426,7 +421,6 @@ download_snell_binary() {
     local arch=$(get_arch)
     local version_with_v=$(format_version_with_v "$version")
     
-    # 获取下载链接
     local download_url=$(get_version_url "$version")
     
     print_info "正在下载 Snell ${version_with_v} for ${arch}..."
@@ -444,7 +438,6 @@ download_snell_binary() {
         return 1
     fi
     
-    # 验证并解压
     if ! unzip -t snell.zip &>/dev/null; then
         print_error "下载的文件损坏"
         cd / && rm -rf "${TMP_DIR}"
@@ -686,69 +679,74 @@ select_best_docker_registry() {
     fi
 }
 
-# 版本选择菜单
+# 版本选择菜单（所有提示输出到 stderr，仅结果输出到 stdout）
 show_version_menu() {
-    local latest_version=$(get_official_latest_version)
-    
-    echo ""
-    echo -e "${CYAN}请选择要安装的版本：${NC}"
-    echo -e "  ${GREEN}1${NC}) 最新稳定版 - v${latest_version}"
-    echo -e "  ${GREEN}2${NC}) 手动输入指定版本"
-    echo ""
-    echo -e "${YELLOW}提示：${NC}"
-    echo "  • 手动输入支持完整版本号 (如: 5.0.1, v5.0.0b2, 4.1.1)"
-    echo "  • 也支持大版本号 (如: 3, 4, 5) 自动选择对应最新稳定版"
-    echo "  • 脚本会自动验证版本是否存在于官方源或 GitHub 备份"
-    echo ""
-    
-    while true; do
-        choice=$(read_with_default "请选择" "1")
-        case $choice in
-            1)
-                if [ -z "$latest_version" ]; then
-                    print_error "无法获取最新版本信息"
-                    continue
-                fi
-                echo "$latest_version"
-                return 0
-                ;;
-            2)
-                while true; do
-                    custom_version=$(read_with_default "请输入版本号" "")
-                    custom_version=$(echo "$custom_version" | sed 's/^v//' | tr -d ' ')
-                    
-                    if [ -z "$custom_version" ]; then
-                        print_error "版本号不能为空"
+    # 所有屏幕输出都重定向到 stderr，避免污染返回值
+    {
+        local latest_version=$(get_official_latest_version)
+        
+        echo ""
+        echo -e "${CYAN}请选择要安装的版本：${NC}"
+        echo -e "  ${GREEN}1${NC}) 最新稳定版 - v${latest_version}"
+        echo -e "  ${GREEN}2${NC}) 手动输入指定版本"
+        echo ""
+        echo -e "${YELLOW}提示：${NC}"
+        echo "  • 手动输入支持完整版本号 (如: 5.0.1, v5.0.0b2, 4.1.1)"
+        echo "  • 也支持大版本号 (如: 3, 4, 5) 自动选择对应最新稳定版"
+        echo "  • 脚本会自动验证版本是否存在于官方源或 GitHub 备份"
+        echo ""
+        
+        local selected=""
+        while true; do
+            choice=$(read_with_default "请选择" "1")
+            case $choice in
+                1)
+                    if [ -z "$latest_version" ]; then
+                        print_error "无法获取最新版本信息"
                         continue
                     fi
-                    
-                    # 检查是否为大版本号
-                    if [[ "$custom_version" =~ ^[0-9]+$ ]]; then
-                        local resolved=$(resolve_major_version "$custom_version")
-                        if [ -n "$resolved" ]; then
-                            echo "$resolved"
-                            return 0
-                        else
-                            print_error "找不到版本 ${custom_version}.x 系列的最新稳定版"
+                    selected="$latest_version"
+                    break
+                    ;;
+                2)
+                    while true; do
+                        custom_version=$(read_with_default "请输入版本号" "")
+                        custom_version=$(echo "$custom_version" | sed 's/^v//' | tr -d ' ')
+                        
+                        if [ -z "$custom_version" ]; then
+                            print_error "版本号不能为空"
                             continue
                         fi
-                    fi
-                    
-                    # 检查版本是否存在
-                    if check_version_exists "$custom_version"; then
-                        echo "$custom_version"
-                        return 0
-                    else
-                        print_error "版本 v${custom_version} 不存在于官方源或 GitHub 备份"
-                        print_info "请检查版本号是否正确，支持测试版如 5.0.0b2"
-                    fi
-                done
-                ;;
-            *)
-                print_warning "无效选择，请输入 1 或 2"
-                ;;
-        esac
-    done
+                        
+                        if [[ "$custom_version" =~ ^[0-9]+$ ]]; then
+                            local resolved=$(resolve_major_version "$custom_version")
+                            if [ -n "$resolved" ]; then
+                                selected="$resolved"
+                                break 2
+                            else
+                                print_error "找不到版本 ${custom_version}.x 系列的最新稳定版"
+                                continue
+                            fi
+                        fi
+                        
+                        if check_version_exists "$custom_version"; then
+                            selected="$custom_version"
+                            break 2
+                        else
+                            print_error "版本 v${custom_version} 不存在于官方源或 GitHub 备份"
+                            print_info "请检查版本号是否正确，支持测试版如 5.0.0b2"
+                        fi
+                    done
+                    ;;
+                *)
+                    print_warning "无效选择，请输入 1 或 2"
+                    ;;
+            esac
+        done
+    } >&2  # 将整个块的输出（提示信息）重定向到 stderr
+
+    # 最终返回选择的版本号到 stdout
+    echo "$selected"
 }
 
 # 二进制安装
@@ -880,13 +878,12 @@ EOF
 install_wizard() {
     print_title "Snell 安装向导"
     
-    # 选择安装方式
     echo "请选择安装方式："
     echo "  1) 二进制安装 (systemd，性能最优) 【默认】"
     echo "  2) Docker 安装 (容器化，便于管理)"
     install_method=$(read_with_default "请选择" "1")
     
-    # 选择版本（二进制和 Docker 都用同样的版本选择）
+    # 选择版本
     version=$(show_version_menu)
     if [ -z "$version" ]; then
         print_error "版本选择失败"
