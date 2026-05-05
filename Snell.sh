@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Snell 一键管理脚本 (v2.5.1)
-# 修复下载地址拼接错误、端口/版本提取、状态显示
+# Snell 一键管理脚本 (v2.6)
+# 修复 GitHub 下载地址拼接、虚拟网卡检测、端口/版本提取、配置交互化
 
 set -e
 
@@ -78,10 +78,9 @@ format_version_without_v() {
 check_version_exists() {
     local ver="$1" arch=$(get_arch)
     local v_with=$(format_version_with_v "$ver")
-    local v_without=$(format_version_without_v "$ver")
     # 检查官方源
     curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null && return 0
-    # 检查 GitHub 备份源
+    # 检查 GitHub 备份源（直接使用完整版本号作为目录名）
     curl --head -sf --output /dev/null "${GITHUB_BASE}/${v_with}/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null && return 0
     return 1
 }
@@ -93,7 +92,7 @@ get_version_url() {
     if curl --head -sf --output /dev/null "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip" 2>/dev/null; then
         echo "https://dl.nssurge.com/snell/snell-server-${v_with}-linux-${arch}.zip"
     else
-        # 使用 GitHub 备份源
+        # 使用 GitHub 备份源（目录名和文件名都使用完整带 v 的版本号）
         echo "${GITHUB_BASE}/${v_with}/snell-server-${v_with}-linux-${arch}.zip"
     fi
 }
@@ -101,7 +100,7 @@ get_version_url() {
 get_official_latest_version() {
     local v; v=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell 2>/dev/null | grep -oP 'snell-server-v\K\d+\.\d+\.\d+' | head -1)
     [ -z "$v" ] && v=$(curl -fsSL "${GITHUB_API}" 2>/dev/null | grep -oP '"name": "v\K\d+\.\d+\.\d+"' | sed 's/"//g' | sort -V | tail -1)
-    clean_version "$v"
+    [ -n "$v" ] && clean_version "$v" || echo ""
 }
 
 get_major_version() {
@@ -250,8 +249,28 @@ generate_psk() {
     fi
 }
 
+# 检测物理网络接口（排除虚拟接口）
 detect_interface() {
-    ip route | grep default | awk '{print $5}' | head -1
+    # 获取默认路由接口
+    local default_iface=$(ip route 2>/dev/null | grep '^default' | awk '{print $5}' | head -1)
+    
+    # 检查是否为有效物理接口
+    if [ -n "$default_iface" ] && [ -d "/sys/class/net/$default_iface" ] && [[ ! "$default_iface" =~ ^(lo|docker|br-|veth|tun|tap) ]]; then
+        echo "$default_iface"
+        return 0
+    fi
+    
+    # 尝试获取第一个非虚拟、非回环接口
+    local iface
+    for iface in $(ls /sys/class/net 2>/dev/null); do
+        [[ "$iface" =~ ^(lo|docker|br-|veth|tun|tap) ]] && continue
+        if [ -d "/sys/class/net/$iface" ] && ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
+            echo "$iface"
+            return 0
+        fi
+    done
+    
+    # 回退到任意非回环接口
     ls /sys/class/net 2>/dev/null | grep -v lo | head -1
 }
 
@@ -492,11 +511,10 @@ show_version_menu() {
     echo "$selected"
 }
 
-# 交互式收集配置（不包含安装方式和版本选择）
+# 交互式收集配置
 collect_config() {
     local version="$1" install_method="$2"
 
-    # 端口
     echo ""
     print_title "端口配置"
     echo -e "${CYAN}说明: 端口范围 10000-65535，默认自动生成随机可用端口${NC}"
@@ -525,7 +543,6 @@ collect_config() {
         print_success "已自动生成随机端口: ${port}"
     fi
 
-    # PSK
     echo ""
     print_title "密码配置"
     echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码${NC}"
@@ -541,7 +558,6 @@ collect_config() {
         print_success "已自动生成密码: ${psk}"
     fi
 
-    # IPv6
     echo ""
     print_title "IPv6 配置"
     echo -e "${CYAN}说明: 是否启用 IPv6 监听，默认关闭 (false)${NC}"
@@ -554,7 +570,6 @@ collect_config() {
         print_info "IPv6 保持关闭（默认）"
     fi
 
-    # DNS
     local dns=""
     echo ""
     print_title "DNS 配置 (可选)"
@@ -571,7 +586,6 @@ collect_config() {
         print_info "跳过 DNS 配置（使用系统默认）"
     fi
 
-    # 出口网卡
     local egress="" default_iface=$(detect_interface)
     echo ""
     print_title "出口网卡配置 (可选)"
@@ -579,7 +593,13 @@ collect_config() {
     echo "  • 用于指定 Snell 服务使用的网络出口接口"
     echo "  • 可用的网络接口列表:"
     if [ -d "/sys/class/net" ]; then
-        ls /sys/class/net | grep -v lo | sed 's/^/    - /'
+        # 排除虚拟接口
+        ls /sys/class/net | grep -vE '^(lo|docker|br-|veth|tun|tap)' | sed 's/^/    - /'
+        if ls /sys/class/net | grep -vE '^(lo|docker|br-|veth|tun|tap)' 2>/dev/null | grep -q .; then
+            :
+        else
+            echo "    (无可用的物理网络接口)"
+        fi
     else
         echo "    (无法获取网络接口列表)"
     fi
@@ -599,7 +619,6 @@ collect_config() {
         print_info "跳过出口网卡配置（使用默认路由）"
     fi
 
-    # 混淆
     local obfs="" obfs_host=""
     echo ""
     print_title "混淆配置 (可选)"
@@ -641,7 +660,6 @@ collect_config() {
         fi
     fi
 
-    # 导出到全局变量供调用者使用
     cfg_port="$port"
     cfg_psk="$psk"
     cfg_ipv6="$ipv6"
@@ -771,13 +789,10 @@ install_wizard() {
         fi
     fi
 
-    # 收集配置
     collect_config "$version" "$install_method"
 
-    # 使用全局变量
     local port="$cfg_port" psk="$cfg_psk" ipv6="$cfg_ipv6" dns="$cfg_dns" egress="$cfg_egress" obfs="$cfg_obfs" host="$cfg_host"
 
-    # 摘要
     echo ""
     print_title "安装配置摘要"
     echo -e "安装方式: ${CYAN}$([ "$install_method" = "1" ] && echo "二进制" || echo "Docker")${NC}"
@@ -969,7 +984,6 @@ change_config() {
         local network_mode=$(grep "network_mode:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}')
         [ -z "$network_mode" ] && network_mode="host"
         local docker_user=$(grep "user:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}' | sed 's/"//g')
-        local current_image=$(grep "image:" "${DOCKER_COMPOSE_FILE}" | awk '{print $2}')
         install_docker "$version" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_egress" "$cfg_obfs" "$cfg_host" "$network_mode" "$docker_user"
         print_info "Docker 容器已重启并应用新配置"
     fi
