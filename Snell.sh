@@ -21,13 +21,17 @@ SNELL_CONFIG_FILE="${SNELL_CONFIG_DIR}/snell.conf"
 SNELL_SERVICE_FILE="/etc/systemd/system/snell.service"
 SNELL_USER="snell"
 SNELL_GROUP="snell"
-GITHUB_BASE="https://github.com/cary17/Snell/raw/main/Version"
+GITHUB_BASE="https://raw.githubusercontent.com/cary17/Snell/main/Version"
+GITHUB_API="https://api.github.com/repos/cary17/Snell/contents/Version"
 
 # Docker配置
 DOCKER_IMAGE_GHCR="ghcr.io/cary17/snell"
 DOCKER_IMAGE_DOCKERHUB="cary17/snell"
 DOCKER_COMPOSE_DIR="/opt/snell"
 DOCKER_COMPOSE_FILE="${DOCKER_COMPOSE_DIR}/docker-compose.yml"
+
+# 临时文件目录
+TMP_DIR="/tmp/snell_install"
 
 # 需要排除的常用端口
 EXCLUDED_PORTS=(
@@ -237,7 +241,7 @@ detect_interface() {
 
 # 从官方获取最新版本
 get_official_latest_version() {
-    local version=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
+    local version=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell 2>/dev/null \
         | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' \
         | head -1)
     echo "$version"
@@ -245,7 +249,7 @@ get_official_latest_version() {
 
 # 从 GitHub 仓库获取最新版本
 get_github_latest_version() {
-    local version=$(curl -fsSL "https://api.github.com/repos/cary17/Snell/contents/Version" \
+    local version=$(curl -fsSL "${GITHUB_API}" 2>/dev/null \
         | grep -oP '"name": "v\K[0-9]+\.[0-9]+\.[0-9]+"' \
         | sed 's/"//g' \
         | sort -V | tail -n1)
@@ -286,60 +290,71 @@ get_latest_version() {
     return 0
 }
 
-# 下载 Snell 二进制文件
+# 下载 Snell 二进制文件（官方源 + GitHub 备份）
 download_snell_binary() {
     local version=$1
     local version_without_v=$(format_version_without_v "$version")
     local arch=$(get_arch)
     local filename="snell-server-v${version_without_v}-linux-${arch}.zip"
+    
+    # 官方源和 GitHub 备份源（使用 raw 链接）
     local official_url="https://dl.nssurge.com/snell/${filename}"
-    local backup_url="${GITHUB_BASE}/v${version_without_v}/${filename}"
+    local github_url="https://raw.githubusercontent.com/cary17/Snell/main/Version/v${version_without_v}/${filename}"
     
     print_info "正在下载 Snell v${version_without_v} for ${arch}..."
     
-    local tmp_dir=$(mktemp -d)
-    cd "$tmp_dir"
-    
-    local official_version=$(get_official_latest_version)
-    local github_version=$(get_github_latest_version)
-    
-    local use_backup=false
-    if [ "$version_without_v" = "$github_version" ] && [ "$version_without_v" != "$official_version" ]; then
-        use_backup=true
-        print_info "GitHub 版本较新，从备份下载"
-    fi
+    # 创建临时目录
+    rm -rf "${TMP_DIR}"
+    mkdir -p "${TMP_DIR}"
+    cd "${TMP_DIR}"
     
     local success=false
-    if [ "$use_backup" = false ]; then
-        if wget -q --show-progress "$official_url" 2>/dev/null; then
-            print_info "从官方下载成功"
-            success=true
-        elif wget -q --show-progress "$backup_url" 2>/dev/null; then
-            print_info "官方下载失败，从 GitHub 备份下载成功"
-            success=true
-        fi
+    
+    # 尝试从官方下载
+    print_info "尝试从官方源下载..."
+    if wget -q --show-progress --timeout=30 --tries=3 "$official_url" -O "$filename" 2>/dev/null; then
+        print_success "从官方源下载成功"
+        success=true
     else
-        if wget -q --show-progress "$backup_url" 2>/dev/null; then
-            print_info "从 GitHub 备份下载成功"
+        print_warning "官方源下载失败，尝试从 GitHub 备份下载..."
+        if wget -q --show-progress --timeout=30 --tries=3 "$github_url" -O "$filename" 2>/dev/null; then
+            print_success "从 GitHub 备份下载成功"
             success=true
-        elif wget -q --show-progress "$official_url" 2>/dev/null; then
-            print_info "GitHub 备份下载失败，从官方下载成功"
-            success=true
+        else
+            print_error "所有下载源均失败！"
+            print_error "官方源: ${official_url}"
+            print_error "GitHub 备份: ${github_url}"
+            cd / && rm -rf "${TMP_DIR}"
+            return 1
         fi
     fi
     
-    if [ "$success" = false ]; then
-        print_error "下载失败"
-        cd / && rm -rf "$tmp_dir"
+    # 验证 zip 文件
+    if ! unzip -t "$filename" &>/dev/null; then
+        print_error "下载的文件损坏"
+        cd / && rm -rf "${TMP_DIR}"
         return 1
     fi
     
+    # 解压
+    print_info "正在解压..."
     unzip -q "$filename"
+    
+    if [ ! -f "snell-server" ]; then
+        print_error "解压后未找到 snell-server 文件"
+        cd / && rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    
+    # 安装
     mv snell-server "${SNELL_INSTALL_DIR}/snell-server"
     chmod +x "${SNELL_INSTALL_DIR}/snell-server"
     
-    cd / && rm -rf "$tmp_dir"
-    print_info "二进制安装完成"
+    # 清理临时文件
+    cd /
+    rm -rf "${TMP_DIR}"
+    
+    print_success "二进制安装完成"
     return 0
 }
 
@@ -586,7 +601,7 @@ install_binary() {
     systemctl enable snell
     systemctl start snell
     
-    print_info "二进制安装完成"
+    print_success "二进制安装完成"
     
     show_full_config "二进制" "$version" "$port" "$psk" "$ipv6" "$dns" "$egress" "$obfs" "$host"
 }
@@ -686,7 +701,7 @@ EOF
     
     docker-compose up -d
     
-    print_info "Docker 安装完成"
+    print_success "Docker 安装完成"
     
     local display_version="${version}"
     if [ "$version" != "latest" ]; then
@@ -717,10 +732,10 @@ install_wizard() {
     if [ "$ver_choice" = "1" ]; then
         if [ "$install_method" = "1" ]; then
             version=$(get_latest_version) || return 1
-            print_info "将安装最新版本: v${version}"
+            print_success "将安装最新版本: v${version}"
         else
             version="latest"
-            print_info "将安装最新 Docker 镜像: latest"
+            print_success "将安装最新 Docker 镜像: latest"
         fi
     else
         if [ "$install_method" = "1" ]; then
@@ -730,7 +745,7 @@ install_wizard() {
                 return 1
             fi
             version=$(format_version_without_v "$version")
-            print_info "将安装版本: v${version}"
+            print_success "将安装版本: v${version}"
         else
             version=$(read_with_default "请输入版本号 (例如: 5.0.1)" "")
             if [ -z "$version" ]; then
@@ -738,7 +753,7 @@ install_wizard() {
                 return 1
             fi
             version=$(format_version_without_v "$version")
-            print_info "将安装版本: v${version}"
+            print_success "将安装版本: v${version}"
         fi
     fi
     
@@ -772,22 +787,17 @@ install_wizard() {
     # 端口配置
     echo ""
     print_title "端口配置"
+    echo -e "${CYAN}说明: 端口范围 10000-65535，默认自动生成随机可用端口${NC}"
     
-    # 根据安装方式和网络模式决定默认行为
-    if [ "$install_method" = "2" ] && [ "$network_mode" = "bridge" ]; then
-        print_info "bridge 模式下需要指定端口"
-        manual_port="y"
-    else
-        manual_port=$(read_yes_no "是否手动指定端口" "n")
-    fi
+    manual_port=$(read_yes_no "是否手动指定端口" "n")
     
     local port
     if [[ "$manual_port" =~ ^[Yy]$ ]]; then
         while true; do
-            port=$(read_with_default "请输入端口号 (10000-65535)" "")
+            port=$(read_with_default "请输入端口号" "")
             if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 10000 ] && [ "$port" -le 65535 ]; then
                 if is_port_excluded "$port"; then
-                    print_warning "端口 ${port} 是常用服务端口"
+                    print_warning "端口 ${port} 是常用服务端口 (如 HTTP/HTTPS/SSH 等)"
                     continue_anyway=$(read_yes_no "是否继续" "n")
                     [[ "$continue_anyway" =~ ^[Yy]$ ]] && break
                 elif is_port_used "$port"; then
@@ -807,6 +817,8 @@ install_wizard() {
     # PSK 配置
     echo ""
     print_title "密码配置"
+    echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码${NC}"
+    
     manual_psk=$(read_yes_no "是否手动设置密码" "n")
     local psk
     if [[ "$manual_psk" =~ ^[Yy]$ ]]; then
@@ -823,6 +835,8 @@ install_wizard() {
     # IPv6 配置（默认 false）
     echo ""
     print_title "IPv6 配置"
+    echo -e "${CYAN}说明: 是否启用 IPv6 监听，默认关闭 (false)${NC}"
+    
     ipv6_choice=$(read_yes_no "是否启用 IPv6" "n")
     local ipv6="false"
     if [[ "$ipv6_choice" =~ ^[Yy]$ ]]; then
@@ -839,13 +853,14 @@ install_wizard() {
     echo -e "${CYAN}说明:${NC}"
     echo "  • 多个 DNS 请用逗号分隔，例如: 1.1.1.1, 8.8.8.8"
     echo "  • 支持 IPv4 和 IPv6 DNS 服务器"
+    echo "  • 不配置则使用系统默认 DNS"
     echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
     echo ""
     dns=$(read_with_default "请输入 DNS 服务器" "")
     if [ -n "$dns" ]; then
         print_info "已设置 DNS: ${dns}"
     else
-        print_info "跳过 DNS 配置"
+        print_info "跳过 DNS 配置（使用系统默认）"
     fi
     
     # 出口网卡配置
@@ -857,6 +872,7 @@ install_wizard() {
     echo "  • 用于指定 Snell 服务使用的网络出口接口"
     echo "  • 可用的网络接口列表:"
     ls /sys/class/net | grep -v lo | sed 's/^/    - /'
+    echo "  • 不配置则使用系统默认路由"
     echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
     echo ""
     echo -e "检测到的默认网卡: ${YELLOW}${default_iface}${NC}"
@@ -869,23 +885,27 @@ install_wizard() {
             egress=""
         fi
     else
-        print_info "跳过出口网卡配置"
+        print_info "跳过出口网卡配置（使用默认路由）"
     fi
     
     # OBFS 混淆配置
     echo ""
     print_title "混淆配置 (可选)"
-    
-    if [ "$install_method" = "1" ]; then
-        local version_without_v=$(format_version_without_v "$version")
-        local supported_obfs=$(get_supported_obfs "$version_without_v")
-        echo -e "${CYAN}当前版本支持的混淆: ${supported_obfs}${NC}"
-    fi
+    echo -e "${CYAN}说明:${NC}"
+    echo "  • 混淆用于隐藏协议特征"
+    echo "  • http 混淆所有版本支持"
+    echo "  • tls 混淆仅 v3 及以下版本支持"
     echo -e "  • ${YELLOW}直接按回车键跳过此项配置${NC}"
     echo ""
     
     local obfs=""
     local obfs_host=""
+    
+    if [ "$install_method" = "1" ]; then
+        local version_without_v=$(format_version_without_v "$version")
+        local supported_obfs=$(get_supported_obfs "$version_without_v")
+        echo -e "当前版本支持的混淆: ${CYAN}${supported_obfs}${NC}"
+    fi    
     enable_obfs=$(read_yes_no "是否启用混淆" "n")
     if [[ "$enable_obfs" =~ ^[Yy]$ ]]; then
         local version_without_v=$(format_version_without_v "$version")
@@ -925,9 +945,22 @@ install_wizard() {
     echo -e "端口: ${CYAN}${port}${NC}"
     echo -e "密码: ${CYAN}${psk}${NC}"
     echo -e "IPv6: ${CYAN}${ipv6}${NC}"
-    [ -n "$dns" ] && echo -e "DNS: ${CYAN}${dns}${NC}"
-    [ -n "$egress" ] && echo -e "出口网卡: ${CYAN}${egress}${NC}"
-    [ -n "$obfs" ] && [ -n "$obfs_host" ] && echo -e "混淆: ${CYAN}${obfs} -> ${obfs_host}${NC}"
+    [ -n "$dns" ] && echo -e "DNS: ${CYAN}${dns}${NC} (默认: 系统DNS)"
+    [ -n "$egress" ] && echo -e "出口网卡: ${CYAN}${egress}${NC} (默认: 自动路由)"
+    if [ -n "$obfs" ] && [ -n "$obfs_host" ]; then
+        if [ "$install_method" = "1" ]; then
+            local version_without_v=$(format_version_without_v "$version")
+            if check_obfs_support "$version_without_v" "$obfs"; then
+                echo -e "混淆: ${CYAN}${obfs} -> ${obfs_host}${NC}"
+            else
+                echo -e "混淆: ${YELLOW}已忽略（v$(get_major_version "$version_without_v") 不支持 ${obfs}）${NC}"
+            fi
+        else
+            echo -e "混淆: ${CYAN}${obfs} -> ${obfs_host}${NC}"
+        fi
+    else
+        echo -e "混淆: ${YELLOW}未启用${NC}"
+    fi
     
     if [ "$install_method" = "2" ]; then
         echo -e "网络模式: ${CYAN}${network_mode}${NC}"
@@ -935,7 +968,8 @@ install_wizard() {
     fi
     echo ""
     
-    confirm=$(read_yes_no "确认安装" "n")
+    # 确认安装 - 默认改为 yes
+    confirm=$(read_yes_no "确认安装" "y")
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         print_info "取消安装"
         return 0
@@ -1102,7 +1136,7 @@ update_snell() {
             sleep 2
             
             if systemctl is-active snell &>/dev/null; then
-                print_info "更新完成！"
+                print_success "更新完成！"
                 rm -f "${old_binary}"
                 print_info "已清理旧版本"
                 view_config
@@ -1136,7 +1170,7 @@ update_snell() {
             docker-compose pull
             docker-compose up -d
             docker image prune -f
-            print_info "更新完成！"
+            print_success "更新完成！"
             view_config
         else
             local latest_version=$(get_latest_version)
@@ -1149,7 +1183,7 @@ update_snell() {
                     docker-compose pull
                     docker-compose up -d
                     docker image prune -f
-                    print_info "更新完成！"
+                    print_success "更新完成！"
                     view_config
                 fi
             else
@@ -1192,58 +1226,70 @@ change_config() {
     fi
 }
 
-# 卸载
+# 彻底卸载
 uninstall_snell() {
     print_title "彻底卸载 Snell"
     
-    echo -e "${RED}警告：此操作将删除 Snell 及其所有数据！${NC}"
+    echo -e "${RED}警告：此操作将删除 Snell 及其所有相关文件！${NC}"
+    echo -e "${RED}包括：二进制文件、配置文件、systemd服务、Docker容器、镜像、Compose文件等${NC}"
     confirm=$(read_yes_no "确认卸载" "n")
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         print_info "取消卸载"
         return 0
     fi
     
+    # 卸载二进制版本
     if systemctl list-unit-files | grep -q snell.service 2>/dev/null; then
-        systemctl stop snell
-        systemctl disable snell
+        print_info "停止并禁用 Snell 服务..."
+        systemctl stop snell 2>/dev/null
+        systemctl disable snell 2>/dev/null
+        
+        print_info "删除 systemd 服务文件..."
         rm -f "${SNELL_SERVICE_FILE}"
+        
+        print_info "删除二进制文件..."
         rm -f "${SNELL_INSTALL_DIR}/snell-server"
         rm -f "${SNELL_INSTALL_DIR}/snell-server.old"
         
-        del_config=$(read_yes_no "是否删除配置文件" "n")
-        [[ "$del_config" =~ ^[Yy]$ ]] && rm -rf "${SNELL_CONFIG_DIR}"
+        print_info "删除配置文件..."
+        rm -rf "${SNELL_CONFIG_DIR}"
         
-        del_user=$(read_yes_no "是否删除系统用户" "n")
-        [[ "$del_user" =~ ^[Yy]$ ]] && userdel ${SNELL_USER} 2>/dev/null
+        print_info "删除系统用户..."
+        userdel ${SNELL_USER} 2>/dev/null
         
         systemctl daemon-reload
-        print_info "二进制版本已卸载"
+        
+        print_success "二进制版本已完全卸载"
     fi
     
+    # 卸载 Docker 版本
     if docker ps -a | grep -q snell 2>/dev/null; then
+        print_info "停止并删除 Snell 容器..."
         cd "${DOCKER_COMPOSE_DIR}" 2>/dev/null
-        docker-compose down -v
+        docker-compose down -v 2>/dev/null
         
-        del_image=$(read_yes_no "是否删除镜像" "n")
-        if [[ "$del_image" =~ ^[Yy]$ ]]; then
-            local snell_images=$(docker images | grep "snell" | awk '{print $3}')
-            if [ -n "$snell_images" ]; then
-                docker rmi $snell_images 2>/dev/null || true
-                print_info "已删除镜像"
-            fi
+        print_info "删除 Docker 镜像..."
+        local snell_images=$(docker images | grep "snell" | awk '{print $3}')
+        if [ -n "$snell_images" ]; then
+            docker rmi $snell_images 2>/dev/null || true
+            print_success "已删除 Docker 镜像"
         fi
         
-        del_compose=$(read_yes_no "是否删除配置文件" "n")
-        if [[ "$del_compose" =~ ^[Yy]$ ]]; then
-            rm -rf "${DOCKER_COMPOSE_DIR}"
-            print_info "已删除配置文件"
-        fi
+        print_info "删除 Compose 文件及目录..."
+        rm -rf "${DOCKER_COMPOSE_DIR}"
         
-        docker image prune -f
-        print_info "Docker 版本已卸载"
+        print_info "清理未使用的 Docker 资源..."
+        docker image prune -f 2>/dev/null
+        
+        print_success "Docker 版本已完全卸载"
     fi
     
-    print_info "Snell 已彻底卸载"
+    # 清理临时文件
+    rm -rf "${TMP_DIR}"
+    
+    print_success "Snell 已彻底卸载"
+    echo ""
+    echo -e "${YELLOW}所有相关文件已清理完成！${NC}"
 }
 
 # 主菜单
