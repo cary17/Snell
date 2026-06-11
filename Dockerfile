@@ -25,20 +25,52 @@ RUN set -ex && \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server
 
-FROM debian:${BASE_TAG}
+# 检测版本并准备标记文件
+FROM debian:${BASE_TAG} AS version-detector
+COPY --from=builder /tmp/snell-server /tmp/snell-server
+RUN chmod +x /tmp/snell-server && \
+    VERSION=$(/tmp/snell-server -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1) && \
+    MAJOR_VERSION=$(echo "$VERSION" | cut -d. -f1) && \
+    echo "$MAJOR_VERSION" > /tmp/is_v6_or_higher && \
+    if [ "$MAJOR_VERSION" -ge 6 ]; then \
+        echo "v6+" > /tmp/version_type; \
+    else \
+        echo "legacy" > /tmp/version_type; \
+    fi
 
-# 从 Debian 11 (bullseye) 安装 OpenSSL 1.1 和其他依赖
-# Debian 12 默认只有 OpenSSL 3.0，需要从旧版本源安装 1.1
-RUN echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ca-certificates \
-        libc-ares2 \
-        libssl1.1 \
-        libuv1 \
-        libsodium23 \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
-    rm -f /etc/apt/sources.list.d/bullseye.list
+# 最终镜像
+FROM debian:${BASE_TAG}
+ARG SNELL_VERSION
+
+# 复制版本检测结果
+COPY --from=version-detector /tmp/version_type /tmp/version_type
+COPY --from=version-detector /tmp/is_v6_or_higher /tmp/is_v6_or_higher
+
+# 根据 Snell 版本安装依赖
+RUN set -ex && \
+    VERSION_TYPE=$(cat /tmp/version_type) && \
+    if [ "$VERSION_TYPE" = "v6+" ]; then \
+        echo "Installing dependencies for Snell v6+ (requires OpenSSL 1.1 from bullseye)"; \
+        echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends \
+            ca-certificates \
+            libc-ares2 \
+            libssl1.1 \
+            libuv1 \
+            libsodium23 && \
+        rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
+        rm -f /etc/apt/sources.list.d/bullseye.list; \
+    else \
+        echo "Installing dependencies for Snell legacy version (native OpenSSL)"; \
+        apt-get update && \
+        apt-get install -y --no-install-recommends \
+            ca-certificates \
+            libc-ares2 \
+            libuv1 \
+            libsodium23 && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
