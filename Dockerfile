@@ -1,4 +1,4 @@
-ARG BASE_TAG=bookworm-slim
+ARG BASE_TAG=bullseye-slim
 FROM debian:${BASE_TAG} AS builder
 
 ARG TARGETARCH
@@ -27,18 +27,13 @@ RUN set -ex && \
 
 FROM debian:${BASE_TAG}
 
-# 安装运行时依赖
+# 安装所有 Snell 依赖的库
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libcares2 \
+    libssl1.1 \
+    libuv1 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
-
-# 从 Debian bullseye 安装 OpenSSL 1.1（兼容层）
-RUN echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends libssl1.1 && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
-    rm -f /etc/apt/sources.list.d/bullseye.list
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
