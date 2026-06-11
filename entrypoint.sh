@@ -17,26 +17,48 @@ random_psk() {
     echo "$(date +%s)$$" | md5sum | cut -c1-20
 }
 
-# 获取 Snell 版本
+# 从文件读取 Snell 版本
 get_snell_version() {
-    local version=$("./snell-server" -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
-    echo "$version"
+    if [ -f /snell/snell-version ]; then
+        cat /snell/snell-version
+    elif [ -f /snell-version ]; then
+        cat /snell-version
+    else
+        echo "unknown"
+    fi
 }
 
-# 比较版本号（返回值：0 表示 v1 <= v2）
-version_le() {
-    [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]
+# 获取主版本号
+get_major_version() {
+    if [ -f /snell/snell-major-version ]; then
+        cat /snell/snell-major-version
+    elif [ -f /snell-major-version ]; then
+        cat /snell-major-version
+    else
+        echo "0"
+    fi
 }
 
-# 处理 LISTEN 配置（v6 以下版本）
-parse_listen_v4() {
+# 处理 LISTEN 配置（v3 版本）
+parse_listen_v3() {
     local input="$1"
-    # v4 版本只支持单端口，提取第一个数字
+    # v3 版本只支持单端口
     local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
     if [ -z "$port" ]; then
         port="20000"
     fi
-    # v4 版本使用 :::端口 格式实现双栈监听
+    # v3 版本使用 0.0.0.0:端口 格式
+    echo "0.0.0.0:$port"
+}
+
+# 处理 LISTEN 配置（v4/v5 版本）
+parse_listen_v4() {
+    local input="$1"
+    # v4/v5 版本只支持单端口，使用 :::端口 格式实现双栈
+    local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
+    if [ -z "$port" ]; then
+        port="20000"
+    fi
     echo ":::$port"
 }
 
@@ -84,30 +106,40 @@ parse_listen_v6() {
 [ -n "${PSK}" ] && PSK_VAL=$(strip_quotes "${PSK}") || PSK_VAL=$(random_psk)
 IPV6_VAL=$(strip_quotes "${IPV6:-false}")
 
+# 获取 Snell 版本（从文件读取）
+SNELL_VERSION=$(get_snell_version)
+MAJOR_VERSION=$(get_major_version)
+echo "📌 Snell version: $SNELL_VERSION (major: $MAJOR_VERSION)"
+
 # 获取 LISTEN 环境变量
 LISTEN_RAW=$(strip_quotes "${LISTEN:-}")
 if [ -z "$LISTEN_RAW" ]; then
     echo "ℹ️  LISTEN not set, using default port 20000"
 fi
 
-# 获取 Snell 版本
-SNELL_VERSION=$(get_snell_version)
-echo "📌 Snell version: $SNELL_VERSION"
-
 # 根据版本处理 LISTEN
-if [ -z "$SNELL_VERSION" ] || version_le "$SNELL_VERSION" "6.0.0"; then
-    # v6 以下版本
-    echo "🔧 Using Snell v4 compatible mode (single port only)"
-    LISTEN_VAL=$(parse_listen_v4 "$LISTEN_RAW")
-    
-    # 检查 v4 版本是否尝试使用多端口
-    if [ -n "$LISTEN_RAW" ] && echo "$LISTEN_RAW" | grep -q ','; then
-        echo "⚠️  Warning: Snell v4 only supports single port, using first port only"
-    fi
-else
+if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
     # v6+ 版本
     echo "🔧 Using Snell v6+ compatible mode (multi-address/multi-port supported)"
     LISTEN_VAL=$(parse_listen_v6 "$LISTEN_RAW")
+elif [ "$MAJOR_VERSION" -ge 4 ] 2>/dev/null; then
+    # v4/v5 版本
+    echo "🔧 Using Snell v4/v5 compatible mode (single port, dual-stack with :::port)"
+    LISTEN_VAL=$(parse_listen_v4 "$LISTEN_RAW")
+    
+    # 检查旧版本是否尝试使用多端口
+    if [ -n "$LISTEN_RAW" ] && echo "$LISTEN_RAW" | grep -q ','; then
+        echo "⚠️  Warning: Snell v4/v5 only supports single port, using first port only"
+    fi
+else
+    # v3 及以下版本
+    echo "🔧 Using Snell v3 compatible mode (single port, IPv4 only)"
+    LISTEN_VAL=$(parse_listen_v3 "$LISTEN_RAW")
+    
+    # 检查旧版本是否尝试使用多端口
+    if [ -n "$LISTEN_RAW" ] && echo "$LISTEN_RAW" | grep -q ','; then
+        echo "⚠️  Warning: Snell v3 only supports single port, using first port only"
+    fi
 fi
 
 # 生成配置
