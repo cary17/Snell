@@ -6,8 +6,6 @@ ARG SNELL_VERSION
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl unzip && rm -rf /var/lib/apt/lists/*
 
-COPY Version /tmp/Version
-
 RUN set -ex && \
     case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
@@ -18,10 +16,7 @@ RUN set -ex && \
     esac && \
     V_NUM="${SNELL_VERSION#v}" && \
     FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip" && \
-    \
-    if ! curl -fsSL -o /tmp/s.zip "https://dl.nssurge.com/snell/${FILE}"; then \
-        cp "/tmp/Version/v${V_NUM}/${FILE}" /tmp/s.zip; \
-    fi && \
+    curl -fsSL --retry 3 --retry-delay 5 -o /tmp/s.zip "https://dl.nssurge.com/snell/${FILE}" && \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server
 
