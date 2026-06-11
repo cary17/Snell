@@ -1,4 +1,3 @@
-
 ## 支持平台
 
 - `linux/amd64` - x86_64
@@ -39,8 +38,9 @@ services:
 | `PORT` | 监听端口 | `20000` |
 | `PSK` | 预共享密钥 | 随机生成 |
 | `IPV6` | 启用 IPv6 | `false` |
-| `LISTEN` | 完整监听配置 | `:::${PORT}` |
+| `LISTEN` | 监听地址，支持多地址（如 `0.0.0.0:7177,[::]:7177`），会覆盖 PORT（需v6.0.0及以上版本） | `:::${PORT}` |
 | `DNS` | DNS 服务器（多个用逗号分隔，需v4.1.0及以上版本） | - |
+| `DNS_IP_PREFERENCE` | DNS解析IP地址族偏好（`default`/`prefer-ipv4`/`prefer-ipv6`/`ipv4-only`/`ipv6-only`，需v6.0.0及以上版本） | - |
 | `EGRESS_INTERFACE` | 出口网络接口（需要 root 权限，需v5.0.0及以上版本） | - |
 | `OBFS` | 混淆模式（`http`/`tls`）(v4.0.0及以上不建议设置) | - |
 | `HOST` | 混淆主机名（设置OBFS后必须设置） | - |
