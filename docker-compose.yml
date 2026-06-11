@@ -1,18 +1,27 @@
 services:
   snell:
     image: cary17/snell:latest
-    #image: ghcr.io/cary17/snell:latest
+    # image: ghcr.io/cary17/snell:latest
     container_name: snell
     restart: always
     network_mode: "host"
     environment:
       - TZ=Asia/Shanghai
-      - PORT=20001
-      #- LISTEN=0.0.0.0:20001,[::]:20001
+      # 监听配置（推荐使用 LISTEN，v6+ 版本推荐）
+      # 同时监听 IPv4 和 IPv6
+      #- PORT=20001
+      #LISTEN可只写端口同时监听双栈
+      - LISTEN=0.0.0.0:20001,[::]:20001
+      # 认证密钥（必填）
       - PSK=ASb+I52sowkx/XzWZg7O9g==
+      # DNS 配置
       - DNS=8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111
       - DNS_IP_PREFERENCE=prefer-ipv4
+      #可选default, prefer-ipv4, prefer-ipv6, ipv4-only, ipv6-only
+      # IPv6 支持
       - IPV6=true
+      # 出口网卡
       - EGRESS_INTERFACE=eth0
-      #- OBFS=http
-      #- HOST=example.com 
+      # 可选：Obfs 混淆
+      # - OBFS=http
+      # - HOST=example.com
