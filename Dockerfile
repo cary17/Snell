@@ -25,18 +25,32 @@ RUN set -ex && \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server
 
-# 使用 Debian 旧稳定版 (bullseye) 作为基础镜像，它包含 OpenSSL 1.1
-FROM debian:bullseye-slim
+FROM debian:${BASE_TAG}
 
+# 安装所有必要的运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libcares2 \
+    libssl1.1 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+
+# Debian stable-slim 可能没有 libssl1.1，从 Debian 旧版本源安装
+# 如果上面的安装失败，使用下面的备选方案
+RUN if ! dpkg -l | grep -q libssl1.1; then \
+        echo "deb http://deb.debian.org/debian bullseye main" >> /etc/apt/sources.list.d/bullseye.list && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends libssl1.1 && \
+        rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
+        rm -f /etc/apt/sources.list.d/bullseye.list; \
+    fi
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
 COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && \
     chmod 777 /snell
+
+# 如果需要，可以创建符号链接确保库可用
+RUN ldconfig 2>/dev/null || true
 
 ENTRYPOINT ["/snell/entrypoint.sh"]
