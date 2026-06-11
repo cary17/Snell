@@ -1,4 +1,4 @@
-ARG BASE_TAG=stable-slim
+ARG BASE_TAG=bookworm-slim
 FROM debian:${BASE_TAG} AS builder
 
 ARG TARGETARCH
@@ -27,30 +27,23 @@ RUN set -ex && \
 
 FROM debian:${BASE_TAG}
 
-# 安装所有必要的运行时依赖
+# 安装运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libcares2 \
-    libssl1.1 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
-# Debian stable-slim 可能没有 libssl1.1，从 Debian 旧版本源安装
-# 如果上面的安装失败，使用下面的备选方案
-RUN if ! dpkg -l | grep -q libssl1.1; then \
-        echo "deb http://deb.debian.org/debian bullseye main" >> /etc/apt/sources.list.d/bullseye.list && \
-        apt-get update && \
-        apt-get install -y --no-install-recommends libssl1.1 && \
-        rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
-        rm -f /etc/apt/sources.list.d/bullseye.list; \
-    fi
+# 从 Debian bullseye 安装 OpenSSL 1.1（兼容层）
+RUN echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends libssl1.1 && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
+    rm -f /etc/apt/sources.list.d/bullseye.list
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
 COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && \
     chmod 777 /snell
-
-# 如果需要，可以创建符号链接确保库可用
-RUN ldconfig 2>/dev/null || true
 
 ENTRYPOINT ["/snell/entrypoint.sh"]
