@@ -1,13 +1,14 @@
 services:
   snell:
-    image: ghcr.io/cary17/snell:latest
+    image: cary17/snell:latest
+    #image: ghcr.io/cary17/snell:latest
     container_name: snell
     restart: always
     network_mode: "host"
     environment:
       - TZ=Asia/Shanghai
       - PORT=20001
-      #- LISTEN=0.0.0.0:20000,[::]:20000
+      #- LISTEN=0.0.0.0:20001,[::]:20001
       - PSK=ASb+I52sowkx/XzWZg7O9g==
       - DNS=8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111
       - DNS_IP_PREFERENCE=prefer-ipv4
