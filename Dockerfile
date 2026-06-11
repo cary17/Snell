@@ -16,7 +16,12 @@ RUN set -ex && \
     esac && \
     V_NUM="${SNELL_VERSION#v}" && \
     FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip" && \
-    curl -fsSL --retry 3 --retry-delay 5 -o /tmp/s.zip "https://dl.nssurge.com/snell/${FILE}" && \
+    URL="https://dl.nssurge.com/snell/${FILE}" && \
+    echo "Downloading: ${URL}" && \
+    if ! curl -fsSL --retry 3 --retry-delay 5 -o /tmp/s.zip "${URL}"; then \
+        echo "ERROR: ${URL} not found, this platform may not be supported in this version" >&2; \
+        exit 1; \
+    fi && \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server
 
