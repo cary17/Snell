@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell版本 (如 4.0.1、6.0.0b1, 留空自动获取)'
+        description: 'Snell版本 (如 3.0.1、4.0.1、6.0.0b1, 留空自动获取)'
         required: false
         type: string
       debian_version:
@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      major_version: ${{ steps.version.outputs.major_version }}
       should_build: ${{ steps.decide.outputs.should_build }}
       debian_tag: ${{ steps.debian.outputs.tag }}
       platforms: ${{ steps.platforms.outputs.list }}
@@ -36,46 +37,79 @@ jobs:
         id: debian
         run: echo "tag=${{ github.event.inputs.debian_version || 'stable-slim' }}" >> $GITHUB_OUTPUT
 
-      - name: 获取 Snell 官方版本 (带重试)
+      - name: 获取 Snell 版本
         id: version
         run: |
-          for i in {1..5}; do
-            VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
-              | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z][0-9]*)?' \
-              | sort -V | tail -n1)
-            [ -n "$VERSION" ] && break || sleep 10
-          done
-
           if [ -n "${{ github.event.inputs.version }}" ]; then
             V_INPUT="${{ github.event.inputs.version }}"
-            echo "version=v${V_INPUT#v}" >> $GITHUB_OUTPUT
+            VERSION="v${V_INPUT#v}"
           else
+            # 尝试从官网获取最新版本
+            for i in {1..5}; do
+              VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
+                | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z][0-9]*)?' \
+                | sort -V | tail -n1)
+              [ -n "$VERSION" ] && break || sleep 10
+            done
             [ -z "$VERSION" ] && exit 1
-            echo "version=v$VERSION" >> $GITHUB_OUTPUT
+            VERSION="v$VERSION"
           fi
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          
+          # 提取主版本号
+          MAJOR=$(echo "${VERSION#v}" | cut -d. -f1)
+          echo "major_version=${MAJOR}" >> $GITHUB_OUTPUT
+          echo "Detected version: ${VERSION} (major: ${MAJOR})"
 
       - name: 检测可用平台
         id: platforms
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           V_NUM="${VERSION#v}"
+          MAJOR_VERSION="${{ steps.version.outputs.major_version }}"
           BASE_URL="https://dl.nssurge.com/snell"
           PLATFORMS=""
 
-          for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
-            DOCKER_PLAT="${entry%%:*}"
-            ARCH="${entry##*:}"
-            FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
-            STATUS=$(curl -o /dev/null -s -w "%{http_code}" --head "${BASE_URL}/${FILE}")
-            if [ "$STATUS" = "200" ]; then
-              PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
-              echo "✅ ${DOCKER_PLAT} (${FILE})"
-            else
-              echo "⏭️  ${DOCKER_PLAT} 不可用 (HTTP ${STATUS}，跳过)"
-            fi
-          done
+          # v3 版本从本地仓库检测
+          if [ "$MAJOR_VERSION" = "3" ]; then
+            echo "Detecting platforms for Snell v3 from local repository..."
+            for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
+              DOCKER_PLAT="${entry%%:*}"
+              ARCH="${entry##*:}"
+              FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
+              # 检查本地仓库是否存在该文件
+              if curl -fsSL --head "https://raw.githubusercontent.com/${{ github.repository }}/main/Version/v${V_NUM}/${FILE}" > /dev/null 2>&1; then
+                PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
+                echo "✅ ${DOCKER_PLAT} (${FILE}) found in local repo"
+              else
+                echo "⏭️  ${DOCKER_PLAT} 不可用 (文件不存在于本地仓库，跳过)"
+              fi
+            done
+          else
+            # v4+ 版本从官网检测
+            echo "Detecting platforms for Snell v${MAJOR_VERSION} from official website..."
+            for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
+              DOCKER_PLAT="${entry%%:*}"
+              ARCH="${entry##*:}"
+              FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
+              STATUS=$(curl -o /dev/null -s -w "%{http_code}" --head "${BASE_URL}/${FILE}")
+              if [ "$STATUS" = "200" ]; then
+                PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
+                echo "✅ ${DOCKER_PLAT} (${FILE})"
+              else
+                echo "⏭️  ${DOCKER_PLAT} 不可用 (HTTP ${STATUS}，跳过)"
+              fi
+            done
+          fi
 
+          if [ -z "$PLATFORMS" ]; then
+            echo "❌ No platforms available for this version"
+            exit 1
+          fi
+          
           echo "list=${PLATFORMS}" >> $GITHUB_OUTPUT
+          echo "Available platforms: ${PLATFORMS}"
 
       - name: 获取 GHCR 现有版本
         id: ghcr
@@ -87,19 +121,29 @@ jobs:
               | jq -r '.tags[]?' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+([a-z][0-9]*)?$' | sort -V | tail -n1 || echo "v0.0.0")
           fi
           echo "ghcr_version=$GHCR_V" >> $GITHUB_OUTPUT
+          echo "Current GHCR version: $GHCR_V"
 
       - name: 版本比对与决策
         id: decide
         run: |
           OFFICIAL="${{ steps.version.outputs.version }}"
           CURRENT="${{ steps.ghcr.outputs.ghcr_version }}"
+          
           if [ "${{ github.event.inputs.force }}" = "true" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Force build enabled"
           elif [ "$OFFICIAL" != "$CURRENT" ]; then
             HIGHEST=$(printf '%s\n%s' "$OFFICIAL" "$CURRENT" | sort -V | tail -n1)
-            [ "$HIGHEST" == "$OFFICIAL" ] && echo "should_build=true" >> $GITHUB_OUTPUT || echo "should_build=false" >> $GITHUB_OUTPUT
+            if [ "$HIGHEST" == "$OFFICIAL" ]; then
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "New version available: $OFFICIAL (current: $CURRENT)"
+            else
+              echo "should_build=false" >> $GITHUB_OUTPUT
+              echo "Current version $CURRENT is newer or equal to $OFFICIAL"
+            fi
           else
             echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "Version $OFFICIAL already exists"
           fi
 
   build-and-push:
@@ -114,17 +158,21 @@ jobs:
       DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
+      
+      - name: 设置 QEMU 模拟器
+        uses: docker/setup-qemu-action@v4
+      
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-      - name: Login to GHCR
+      - name: 登录 GHCR
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
+      - name: 登录 Docker Hub
         if: env.DOCKER_HUB_TOKEN != ''
         uses: docker/login-action@v4
         with:
@@ -144,13 +192,14 @@ jobs:
             echo "仓库 $USER/$REPO_NAME 不存在，正在创建..."
             curl -s -X POST -u "$USER:$TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"name\":\"$REPO_NAME\",\"is_private\":false,\"description\":\"Snell Server Docker Image\"}" \
+              -d "{\"name\":\"$REPO_NAME\",\"is_private\":false,\"description\":\"Snell Server Docker Image - Support v3 to v6+\"}" \
               "https://hub.docker.com/v2/repositories/$USER/"
+            echo "仓库创建成功"
           else
-            echo "仓库 $USER/$REPO_NAME 已存在。"
+            echo "仓库 $USER/$REPO_NAME 已存在"
           fi
 
-      - name: Build & Push
+      - name: 构建并推送镜像
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -159,8 +208,27 @@ jobs:
           build-args: |
             SNELL_VERSION=${{ needs.check-version.outputs.version }}
             BASE_TAG=${{ needs.check-version.outputs.debian_tag }}
+            GITHUB_REPOSITORY=${{ github.repository }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/snell:latest
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', env.DOCKER_HUB_USERNAME) || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 镜像信息输出
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ 镜像构建成功！"
+          echo "版本: ${{ needs.check-version.outputs.version }}"
+          echo "主版本: ${{ needs.check-version.outputs.major_version }}"
+          echo "Debian 标签: ${{ needs.check-version.outputs.debian_tag }}"
+          echo "支持平台: ${{ needs.check-version.outputs.platforms }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "拉取镜像:"
+          echo "docker pull ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}"
+          if [ -n "${{ env.DOCKER_HUB_USERNAME }}" ]; then
+            echo "docker pull ${{ env.DOCKER_HUB_USERNAME }}/snell:${{ needs.check-version.outputs.version }}"
+          fi
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
