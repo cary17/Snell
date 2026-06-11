@@ -17,20 +17,54 @@ random_psk() {
     echo "$(date +%s)$$" | md5sum | cut -c1-20
 }
 
+# 处理 LISTEN 配置
+# 支持格式：
+# 1. 仅端口: "25169" -> "0.0.0.0:25169, [::]:25169"
+# 2. 多个端口: "25169, 12121" -> "0.0.0.0:25169, [::]:25169, 0.0.0.0:12121, [::]:12121"
+# 3. 完整地址: "0.0.0.0:20001, [::]:20001" -> 直接使用
+# 4. 混合: "0.0.0.0:20001, 12121" -> "0.0.0.0:20001, 0.0.0.0:12121, [::]:12121"
+parse_listen() {
+    local input="$1"
+    local result=""
+    
+    # 按逗号分割
+    IFS=','
+    for item in $input; do
+        # 去除首尾空格
+        item=$(echo "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        
+        # 检查是否已经是完整地址（包含 : 且不是纯数字）
+        if echo "$item" | grep -q ':' && ! echo "$item" | grep -q '^[0-9]\+$'; then
+            # 已经是完整地址，直接添加
+            [ -n "$result" ] && result="$result, "
+            result="${result}${item}"
+        else
+            # 仅端口号，生成 IPv4 和 IPv6 地址
+            [ -n "$result" ] && result="$result, "
+            result="${result}0.0.0.0:${item}, [::]:${item}"
+        fi
+    done
+    
+    echo "$result"
+}
+
 # 处理核心变量
-PORT_VAL=$(strip_quotes "${PORT:-20000}")
+PORT_VAL=$(strip_quotes "${PORT:-}")
 [ -n "${PSK}" ] && PSK_VAL=$(strip_quotes "${PSK}") || PSK_VAL=$(random_psk)
 IPV6_VAL=$(strip_quotes "${IPV6:-false}")
 
-# 处理 LISTEN：优先使用用户设置的 LISTEN
+# 处理 LISTEN（优先级最高）
 if [ -n "${LISTEN}" ]; then
-    LISTEN_VAL=$(strip_quotes "${LISTEN}")
+    LISTEN_RAW=$(strip_quotes "${LISTEN}")
+    LISTEN_VAL=$(parse_listen "$LISTEN_RAW")
 else
-    # 没有设置 LISTEN 时，根据 PORT 和 IPV6 构建默认监听地址
-    if [ "${IPV6_VAL}" = "true" ]; then
-        LISTEN_VAL=":::$PORT_VAL"
+    # 没有设置 LISTEN 时，使用 PORT 配置（兼容旧版本）
+    if [ -n "$PORT_VAL" ]; then
+        # 使用 PORT 配置，生成 IPv4 和 IPv6 地址
+        LISTEN_VAL="0.0.0.0:${PORT_VAL}, [::]:${PORT_VAL}"
     else
-        LISTEN_VAL="0.0.0.0:$PORT_VAL"
+        # 默认配置
+        LISTEN_VAL="0.0.0.0:20000, [::]:20000"
     fi
 fi
 
