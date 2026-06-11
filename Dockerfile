@@ -1,4 +1,4 @@
-ARG BASE_TAG=bullseye-slim
+ARG BASE_TAG=stable-slim
 FROM debian:${BASE_TAG} AS builder
 
 ARG TARGETARCH
@@ -27,18 +27,31 @@ RUN set -ex && \
 
 FROM debian:${BASE_TAG}
 
-# 安装所有 Snell 依赖的库
+# 安装所有 Snell 运行时依赖
+# libc-ares2: DNS 异步解析库
+# libssl3: OpenSSL 3.0 (Debian 12 默认)
+# libuv1: 异步 I/O 库
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libcares2 \
-    libssl1.1 \
+    libc-ares2 \
+    libssl3 \
     libuv1 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+
+# 如果 Snell 需要 OpenSSL 1.1 兼容，取消下面注释
+# RUN echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
+#     apt-get update && \
+#     apt-get install -y --no-install-recommends libssl1.1 && \
+#     rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
+#     rm -f /etc/apt/sources.list.d/bullseye.list
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
 COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && \
     chmod 777 /snell
+
+# 验证所有依赖已满足（可选，用于调试）
+RUN ldd snell-server | grep "not found" && echo "Warning: Missing dependencies" || echo "All dependencies satisfied"
 
 ENTRYPOINT ["/snell/entrypoint.sh"]
