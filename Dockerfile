@@ -27,19 +27,18 @@ RUN set -ex && \
 
 FROM debian:${BASE_TAG}
 
-# 安装基础依赖
+# 安装所有 Snell 运行时依赖
+# libc-ares2: DNS 异步解析库
+# libssl3: OpenSSL 3.0 (Debian 12 默认)
+# libuv1: 异步 I/O 库
+# libsodium23: 加密库
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libc-ares2 \
+    libssl3 \
     libuv1 \
+    libsodium23 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
-
-# 从 Debian 11 安装 OpenSSL 1.1 (Snell 兼容性更好)
-RUN echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends libssl1.1 && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
-    rm -f /etc/apt/sources.list.d/bullseye.list
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
@@ -47,7 +46,7 @@ COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && \
     chmod 777 /snell
 
-# 验证依赖
+# 验证所有依赖已满足
 RUN ldd snell-server | grep "not found" && echo "Warning: Missing dependencies" || echo "All dependencies satisfied"
 
 ENTRYPOINT ["/snell/entrypoint.sh"]
