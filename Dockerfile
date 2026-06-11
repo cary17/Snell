@@ -25,9 +25,9 @@ RUN set -ex && \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server
 
-FROM debian:${BASE_TAG}
+# 使用 Debian 旧稳定版 (bullseye) 作为基础镜像，它包含 OpenSSL 1.1
+FROM debian:bullseye-slim
 
-# 安装运行时依赖：libcares (DNS解析库) 和其他必要库
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libcares2 \
@@ -39,5 +39,4 @@ COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && \
     chmod 777 /snell
 
-# 使用 exec 形式的 ENTRYPOINT 确保信号传递
 ENTRYPOINT ["/snell/entrypoint.sh"]
