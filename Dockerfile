@@ -3,6 +3,7 @@ FROM debian:${BASE_TAG} AS builder
 
 ARG TARGETARCH
 ARG SNELL_VERSION
+ARG GITHUB_REPOSITORY
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
 
@@ -18,7 +19,6 @@ RUN set -ex && \
     MAJOR_VERSION=$(echo "$V_NUM" | cut -d. -f1) && \
     FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip" && \
     \
-    # 判断版本：v3 从本地仓库拉取，v4+ 从官网拉取
     if [ "$MAJOR_VERSION" = "3" ]; then \
         echo "Downloading Snell v3 from local repository..."; \
         LOCAL_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/Version/v${V_NUM}/${FILE}"; \
@@ -78,10 +78,6 @@ RUN set -ex && \
             libc-ares2 \
             libuv1 \
             libsodium23; \
-        # v3 可能不需要 OpenSSL 或需要特定版本
-        if ldd /tmp/snell-server 2>/dev/null | grep -q "libcrypto"; then \
-            apt-get install -y --no-install-recommends libssl1.1; \
-        fi; \
     fi && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
     rm -f /etc/apt/sources.list.d/bullseye.list
