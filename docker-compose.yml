@@ -27,7 +27,7 @@ services:
 
       # 高级配置
       # - LISTEN=0.0.0.0:20000,[::]:20000  # 多地址监听（v6新增，同时监听IPv4和IPv6，会覆盖PORT）
-      # - LOG=notify                   # 日志级别（notify/info/verbose）
+
 
 # 注意：Snell 不支持手动配置 TFO（TCP Fast Open）
 
