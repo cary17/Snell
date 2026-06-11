@@ -27,8 +27,11 @@ RUN set -ex && \
 
 FROM debian:${BASE_TAG}
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+# 安装运行时依赖：libcares (DNS解析库) 和其他必要库
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libcares2 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
