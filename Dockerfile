@@ -4,7 +4,7 @@ FROM debian:${BASE_TAG} AS builder
 ARG TARGETARCH
 ARG SNELL_VERSION
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl unzip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
 
 RUN set -ex && \
     case "${TARGETARCH}" in \
