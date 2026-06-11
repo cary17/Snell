@@ -31,8 +31,8 @@ psk = ${PSK_VAL}
 ipv6 = ${IPV6_VAL}
 EOF
 
-# 环境变量映射 (DNS, EGRESS_INTERFACE, OBFS, HOST)
-for var in DNS EGRESS_INTERFACE OBFS HOST; do
+# 环境变量映射 (DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, OBFS, HOST)
+for var in DNS DNS_IP_PREFERENCE EGRESS_INTERFACE OBFS HOST; do
     val=$(eval echo "\$$var")
     if [ -n "$val" ]; then
         clean_val=$(strip_quotes "$val")
