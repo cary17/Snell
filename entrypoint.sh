@@ -21,7 +21,18 @@ random_psk() {
 PORT_VAL=$(strip_quotes "${PORT:-20000}")
 [ -n "${PSK}" ] && PSK_VAL=$(strip_quotes "${PSK}") || PSK_VAL=$(random_psk)
 IPV6_VAL=$(strip_quotes "${IPV6:-false}")
-[ -n "${LISTEN}" ] && LISTEN_VAL=$(strip_quotes "${LISTEN}") || LISTEN_VAL=":::${PORT_VAL}"
+
+# 处理 LISTEN：优先使用用户设置的 LISTEN
+if [ -n "${LISTEN}" ]; then
+    LISTEN_VAL=$(strip_quotes "${LISTEN}")
+else
+    # 没有设置 LISTEN 时，根据 PORT 和 IPV6 构建默认监听地址
+    if [ "${IPV6_VAL}" = "true" ]; then
+        LISTEN_VAL=":::$PORT_VAL"
+    else
+        LISTEN_VAL="0.0.0.0:$PORT_VAL"
+    fi
+fi
 
 # 生成配置
 cat > /snell/snell.conf <<EOF
