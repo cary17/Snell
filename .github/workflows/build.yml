@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Snell版本 (如 4.0.1, 留空自动获取)'
+        description: 'Snell版本 (如 4.0.1、6.0.0b1, 留空自动获取)'
         required: false
         type: string
       debian_version:
@@ -27,6 +27,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       should_build: ${{ steps.decide.outputs.should_build }}
       debian_tag: ${{ steps.debian.outputs.tag }}
+      platforms: ${{ steps.platforms.outputs.list }}
 
     steps:
       - uses: actions/checkout@v5
@@ -40,11 +41,11 @@ jobs:
         run: |
           for i in {1..5}; do
             VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
-              | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' \
+              | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z][0-9]*)?' \
               | sort -V | tail -n1)
             [ -n "$VERSION" ] && break || sleep 10
           done
-          
+
           if [ -n "${{ github.event.inputs.version }}" ]; then
             V_INPUT="${{ github.event.inputs.version }}"
             echo "version=v${V_INPUT#v}" >> $GITHUB_OUTPUT
@@ -53,6 +54,29 @@ jobs:
             echo "version=v$VERSION" >> $GITHUB_OUTPUT
           fi
 
+      - name: 检测可用平台
+        id: platforms
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          V_NUM="${VERSION#v}"
+          BASE_URL="https://dl.nssurge.com/snell"
+          PLATFORMS=""
+
+          for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
+            DOCKER_PLAT="${entry%%:*}"
+            ARCH="${entry##*:}"
+            FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
+            STATUS=$(curl -o /dev/null -s -w "%{http_code}" --head "${BASE_URL}/${FILE}")
+            if [ "$STATUS" = "200" ]; then
+              PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
+              echo "✅ ${DOCKER_PLAT} (${FILE})"
+            else
+              echo "⏭️  ${DOCKER_PLAT} 不可用 (HTTP ${STATUS}，跳过)"
+            fi
+          done
+
+          echo "list=${PLATFORMS}" >> $GITHUB_OUTPUT
+
       - name: 获取 GHCR 现有版本
         id: ghcr
         run: |
@@ -60,7 +84,7 @@ jobs:
           GHCR_V="v0.0.0"
           if [ -n "$TOKEN" ]; then
             GHCR_V=$(curl -fsSL -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list \
-              | jq -r '.tags[]?' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || echo "v0.0.0")
+              | jq -r '.tags[]?' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+([a-z][0-9]*)?$' | sort -V | tail -n1 || echo "v0.0.0")
           fi
           echo "ghcr_version=$GHCR_V" >> $GITHUB_OUTPUT
 
@@ -92,7 +116,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
-      
+
       - name: Login to GHCR
         uses: docker/login-action@v4
         with:
@@ -101,8 +125,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        # 修复：通过 env 变量来检查
-        if: github.repository_owner == '你的Github用户名' || env.DOCKER_HUB_TOKEN != ''
+        if: env.DOCKER_HUB_TOKEN != ''
         uses: docker/login-action@v4
         with:
           username: ${{ env.DOCKER_HUB_USERNAME }}
@@ -114,9 +137,9 @@ jobs:
           REPO_NAME="snell"
           USER="${{ env.DOCKER_HUB_USERNAME }}"
           TOKEN="${{ env.DOCKER_HUB_TOKEN }}"
-          
+
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$USER:$TOKEN" "https://hub.docker.com/v2/repositories/$USER/$REPO_NAME/")
-          
+
           if [ "$HTTP_STATUS" -eq 404 ]; then
             echo "仓库 $USER/$REPO_NAME 不存在，正在创建..."
             curl -s -X POST -u "$USER:$TOKEN" \
@@ -132,7 +155,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v7
+          platforms: ${{ needs.check-version.outputs.platforms }}
           build-args: |
             SNELL_VERSION=${{ needs.check-version.outputs.version }}
             BASE_TAG=${{ needs.check-version.outputs.debian_tag }}
