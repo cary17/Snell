@@ -1,66 +1,17 @@
-version: '3.8'
-
 services:
   snell:
     image: ghcr.io/cary17/snell:latest
-    #image: cary17/snell:latest
     container_name: snell
-    restart: unless-stopped
-
-    ports:
-      - "20000:20000"
-
+    restart: always
+    network_mode: "host"
     environment:
-      # 必需配置
-      - PSK=your_psk_here_change_me
-
-      # 基础配置
-      - PORT=20000                    # 监听端口（默认20000）
-      - IPV6=false                    # 启用IPv6（默认false）
-
-      # 可选配置（不需要时删除或注释掉）
-      - DNS=8.8.8.8, 1.0.0.1         # DNS服务器
-      # - DNS_IP_PREFERENCE=prefer-ipv4 # DNS解析IP偏好（default/prefer-ipv4/prefer-ipv6/ipv4-only/ipv6-only，需v6.0.0及以上版本）
-      # - EGRESS_INTERFACE=eth0        # 出口网络接口（需要 root 权限，需v5.0.0及以上版本）
-      # - OBFS=http                    # 混淆模式（http/tls）
-      # - HOST=example.com             # 混淆主机名
-
-      # 高级配置
-      # - LISTEN=0.0.0.0:20000,[::]:20000  # 多地址监听（v6新增，同时监听IPv4和IPv6，会覆盖PORT）
-
-
-# 注意：Snell 不支持手动配置 TFO（TCP Fast Open）
-
-# ============================================
-# 配置说明
-# ============================================
-#
-# 必需配置：
-# PSK: 预共享密钥（强烈建议修改默认值）
-#
-# 可选配置只在需要时添加，不需要的直接删除或注释：
-# - DNS: 自定义DNS服务器
-# - DNS_IP_PREFERENCE: DNS解析地址族偏好，双栈/纯IPv6等环境下用于稳定控制连接行为
-# - EGRESS_INTERFACE: 指定出口网络接口（需要 root 权限和路由表）
-# - OBFS: 启用混淆（需配合HOST使用）
-# - HOST: 混淆域名
-#
-# 注意：
-# - 未配置的选项不会出现在 snell.conf 中
-# - LISTEN 支持多地址，如 0.0.0.0:7177,[::]:7177，无需依赖系统IPv6兼容行为
-# - egress-interface 需要该接口有目标地址和 DNS 的路由表
-# - 容器使用 root 用户运行以支持特权功能
-# - TFO（TCP Fast Open）由系统和 Snell 自动管理，无需手动配置
-
-# ============================================
-# 多实例示例（取消注释使用）
-# snell-2:
-#   image: ghcr.io/cary17/snell:latest
-#   container_name: snell-2
-#   restart: unless-stopped
-#   ports:
-#     - "20001:20001"
-#   environment:
-#     - PORT=20001
-#     - PSK=another_psk_here
-#     - IPV6=false
+      - TZ=Asia/Shanghai
+      - PORT=20001
+      #- LISTEN=0.0.0.0:20000,[::]:20000
+      - PSK=ASb+I52sowkx/XzWZg7O9g==
+      - DNS=8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111
+      - DNS_IP_PREFERENCE=prefer-ipv4
+      - IPV6=true
+      - EGRESS_INTERFACE=eth0
+      #- OBFS=http
+      #- HOST=example.com 
