@@ -6,7 +6,7 @@
 ## 支持平台
 
 `linux/amd64` | `linux/386` | `linux/arm64` | `linux/arm/v7`
-
+```
 ## 快速开始
 ```
 
