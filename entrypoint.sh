@@ -9,14 +9,20 @@ strip_quotes() {
     echo "$1" | sed -e 's/^[[:space:]"'"'"']//' -e 's/[[:space:]"'"'"']$//'
 }
 
-# 随机生成 PSK（使用 openssl rand --base64 32）
+# 随机生成 PSK（使用 debian 内置命令，32-64位随机字符）
 random_psk() {
+    # 随机生成长度 32-64 位
+    LENGTH=$((32 + RANDOM % 33))
+    
+    # 优先使用 openssl（通常在 debian 中可用）
     if command -v openssl >/dev/null 2>&1; then
-        openssl rand --base64 32 2>/dev/null
+        openssl rand -base64 48 2>/dev/null | tr -d '\n=' | cut -c1-${LENGTH}
+    # 其次使用 /dev/urandom
     elif [ -r /dev/urandom ]; then
-        tr -dc 'A-Za-z0-9+/' </dev/urandom | head -c 32
+        tr -dc 'A-Za-z0-9+/' </dev/urandom | head -c ${LENGTH}
+    # 最后回退到 sha256sum
     else
-        echo "$(date +%s)$$" | sha256sum | cut -c1-32
+        echo "$(date +%s)$$$(hostname)" | sha256sum | cut -c1-${LENGTH}
     fi
 }
 
@@ -51,11 +57,6 @@ get_major_version() {
 get_full_version() {
     VERSION=$(get_snell_version)
     echo "${VERSION#v}"
-}
-
-# 比较版本号（version1 >= version2 返回 true）
-version_ge() {
-    [ "$(printf '%s\n%s' "$2" "$1" | sort -V | head -n1)" = "$2" ]
 }
 
 # 处理 LISTEN 配置
@@ -126,7 +127,6 @@ SNELL_VERSION=$(get_snell_version)
 FULL_VERSION=$(get_full_version)
 MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
-PATCH_VERSION=$(echo "$FULL_VERSION" | cut -d. -f3)
 
 echo "📌 Snell version: $SNELL_VERSION (major: $MAJOR_VERSION, full: $FULL_VERSION)"
 
