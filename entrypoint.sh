@@ -23,12 +23,11 @@ random_psk() {
         LENGTH=48
     fi
     
-    # 生成随机 PSK
-    if command -v openssl >/dev/null 2>&1; then
-        openssl rand -base64 64 2>/dev/null | tr -d '\n=' | cut -c1-${LENGTH}
-    elif [ -r /dev/urandom ]; then
+    # 使用 /dev/urandom 生成随机 PSK
+    if [ -r /dev/urandom ]; then
         tr -dc 'A-Za-z0-9+/' </dev/urandom | head -c ${LENGTH}
     else
+        # 最后回退方案
         echo "$(date +%s%N)$$$(hostname)" | sha256sum | cut -c1-${LENGTH}
     fi
 }
