@@ -128,130 +128,143 @@ parse_listen() {
     fi
 }
 
-# 主逻辑
-SNELL_VERSION=$(get_snell_version)
-FULL_VERSION=$(get_full_version)
-MAJOR_VERSION=$(get_major_version)
-MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
+# 检查配置文件是否已存在
+CONFIG_FILE="/snell/snell.conf"
 
-# 1. 处理 IPV6（v6+ 默认 true，否则默认 false）
-if [ -n "${IPV6}" ]; then
-    IPV6_VAL=$(strip_quotes "${IPV6}")
+if [ -f "$CONFIG_FILE" ]; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✅ Existing configuration found, using it"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cat "$CONFIG_FILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 else
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "📝 Generating new configuration..."
+    
+    # 主逻辑
+    SNELL_VERSION=$(get_snell_version)
+    FULL_VERSION=$(get_full_version)
+    MAJOR_VERSION=$(get_major_version)
+    MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
+    
+    # 1. 处理 IPV6（v6+ 默认 true，否则默认 false）
+    if [ -n "${IPV6}" ]; then
+        IPV6_VAL=$(strip_quotes "${IPV6}")
+    else
+        if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
+            IPV6_VAL="true"
+        else
+            IPV6_VAL="false"
+        fi
+    fi
+    
+    # 2. 处理 PSK
+    if [ -n "${PSK}" ]; then
+        PSK_VAL=$(strip_quotes "${PSK}")
+    else
+        PSK_VAL=$(random_psk)
+    fi
+    
+    # 3. 处理 LISTEN
+    LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
+    
+    # 4. 处理 DNS（v4.1.0 开始支持）
+    if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
+        # v4.1.0 之前的版本不支持 DNS 配置项
+        DNS_VAL=""
+    elif [ "$MAJOR_VERSION" -lt 4 ]; then
+        # v3 及以下版本不支持 DNS
+        DNS_VAL=""
+    else
+        if [ -n "${DNS}" ]; then
+            DNS_VAL=$(strip_quotes "${DNS}")
+        else
+            DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+        fi
+    fi
+    
+    # 5. 处理 DNS_IP_PREFERENCE（v6 开始支持）
     if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-        IPV6_VAL="true"
+        if [ -n "${DNS_IP_PREFERENCE}" ]; then
+            DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
+        else
+            DNS_IP_PREFERENCE_VAL="prefer-ipv4"
+        fi
     else
-        IPV6_VAL="false"
+        DNS_IP_PREFERENCE_VAL=""
     fi
-fi
-
-# 2. 处理 PSK
-if [ -n "${PSK}" ]; then
-    PSK_VAL=$(strip_quotes "${PSK}")
-else
-    PSK_VAL=$(random_psk)
-fi
-
-# 3. 处理 LISTEN
-LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
-
-# 4. 处理 DNS（v4.1.0 开始支持）
-if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
-    # v4.1.0 之前的版本不支持 DNS 配置项
-    DNS_VAL=""
-elif [ "$MAJOR_VERSION" -lt 4 ]; then
-    # v3 及以下版本不支持 DNS
-    DNS_VAL=""
-else
-    if [ -n "${DNS}" ]; then
-        DNS_VAL=$(strip_quotes "${DNS}")
-    else
-        DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
-    fi
-fi
-
-# 5. 处理 DNS_IP_PREFERENCE（v6 开始支持）
-if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-    if [ -n "${DNS_IP_PREFERENCE}" ]; then
-        DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
-    else
-        DNS_IP_PREFERENCE_VAL="prefer-ipv4"
-    fi
-else
-    DNS_IP_PREFERENCE_VAL=""
-fi
-
-# 6. 处理 EGRESS_INTERFACE（v5 开始支持）
-if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
-    if [ -n "${EGRESS_INTERFACE}" ]; then
-        EGRESS_INTERFACE_VAL=$(strip_quotes "${EGRESS_INTERFACE}")
+    
+    # 6. 处理 EGRESS_INTERFACE（v5 开始支持）
+    if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
+        if [ -n "${EGRESS_INTERFACE}" ]; then
+            EGRESS_INTERFACE_VAL=$(strip_quotes "${EGRESS_INTERFACE}")
+        else
+            EGRESS_INTERFACE_VAL=""
+        fi
     else
         EGRESS_INTERFACE_VAL=""
     fi
-else
-    EGRESS_INTERFACE_VAL=""
-fi
-
-# 7. 处理 OBFS 和 HOST（v6 及以上版本不支持）
-if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
-    # v5 及以下版本支持 OBFS 和 HOST
-    if [ -n "${OBFS}" ]; then
-        OBFS_VAL=$(strip_quotes "${OBFS}")
-    else
-        OBFS_VAL=""
-    fi
     
-    if [ -n "${HOST}" ]; then
-        HOST_VAL=$(strip_quotes "${HOST}")
+    # 7. 处理 OBFS 和 HOST（v6 及以上版本不支持）
+    if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
+        # v5 及以下版本支持 OBFS 和 HOST
+        if [ -n "${OBFS}" ]; then
+            OBFS_VAL=$(strip_quotes "${OBFS}")
+        else
+            OBFS_VAL=""
+        fi
+        
+        if [ -n "${HOST}" ]; then
+            HOST_VAL=$(strip_quotes "${HOST}")
+        else
+            HOST_VAL=""
+        fi
     else
+        # v6+ 版本不支持 OBFS 和 HOST
+        OBFS_VAL=""
         HOST_VAL=""
     fi
-else
-    # v6+ 版本不支持 OBFS 和 HOST
-    OBFS_VAL=""
-    HOST_VAL=""
-fi
-
-# 生成配置文件
-cat > /snell/snell.conf <<EOF
+    
+    # 生成配置文件
+    cat > "$CONFIG_FILE" <<EOF
 [snell-server]
 listen = ${LISTEN_VAL}
 psk = ${PSK_VAL}
 ipv6 = ${IPV6_VAL}
 EOF
-
-# 添加 DNS（如果支持且有值）
-if [ -n "$DNS_VAL" ]; then
-    echo "dns = $DNS_VAL" >> /snell/snell.conf
+    
+    # 添加 DNS（如果支持且有值）
+    if [ -n "$DNS_VAL" ]; then
+        echo "dns = $DNS_VAL" >> "$CONFIG_FILE"
+    fi
+    
+    # 添加 DNS_IP_PREFERENCE（如果有值）
+    if [ -n "$DNS_IP_PREFERENCE_VAL" ]; then
+        echo "dns-ip-preference = $DNS_IP_PREFERENCE_VAL" >> "$CONFIG_FILE"
+    fi
+    
+    # 添加 EGRESS_INTERFACE（如果有值）
+    if [ -n "$EGRESS_INTERFACE_VAL" ]; then
+        echo "egress-interface = $EGRESS_INTERFACE_VAL" >> "$CONFIG_FILE"
+    fi
+    
+    # 添加 OBFS（仅 v5 及以下版本且如果有值）
+    if [ -n "$OBFS_VAL" ]; then
+        echo "obfs = $OBFS_VAL" >> "$CONFIG_FILE"
+    fi
+    
+    # 添加 HOST（仅 v5 及以下版本且如果有值）
+    if [ -n "$HOST_VAL" ]; then
+        echo "host = $HOST_VAL" >> "$CONFIG_FILE"
+    fi
+    
+    # 显示新生成的配置文件内容
+    cat "$CONFIG_FILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
-
-# 添加 DNS_IP_PREFERENCE（如果有值）
-if [ -n "$DNS_IP_PREFERENCE_VAL" ]; then
-    echo "dns-ip-preference = $DNS_IP_PREFERENCE_VAL" >> /snell/snell.conf
-fi
-
-# 添加 EGRESS_INTERFACE（如果有值）
-if [ -n "$EGRESS_INTERFACE_VAL" ]; then
-    echo "egress-interface = $EGRESS_INTERFACE_VAL" >> /snell/snell.conf
-fi
-
-# 添加 OBFS（仅 v5 及以下版本且如果有值）
-if [ -n "$OBFS_VAL" ]; then
-    echo "obfs = $OBFS_VAL" >> /snell/snell.conf
-fi
-
-# 添加 HOST（仅 v5 及以下版本且如果有值）
-if [ -n "$HOST_VAL" ]; then
-    echo "host = $HOST_VAL" >> /snell/snell.conf
-fi
-
-# 显示配置文件内容
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-cat /snell/snell.conf
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # 启动 snell-server
-./snell-server -c /snell/snell.conf &
+./snell-server -c "$CONFIG_FILE" &
 SNELL_PID=$!
 
 # 等待子进程退出
