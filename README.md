@@ -9,11 +9,12 @@
 ```
 ## 快速开始
 ```
-
 # 基础运行（自动生成随机 PSK 和端口）
 docker run -d --name snell --restart always ghcr.io/cary17/snell:latest
-
+```
+```
 # 指定端口和密码
+```
 docker run -d \
   --name snell \
   --restart always \
