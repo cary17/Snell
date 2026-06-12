@@ -9,20 +9,27 @@ strip_quotes() {
     echo "$1" | sed -e 's/^[[:space:]"'"'"']//' -e 's/[[:space:]"'"'"']$//'
 }
 
-# 随机生成 PSK（使用 debian 内置命令，32-64位随机字符）
+# 随机生成 PSK（32-64位随机长度随机字符）
 random_psk() {
-    # 随机生成长度 32-64 位
-    LENGTH=$((32 + RANDOM % 33))
+    # 从 /dev/urandom 获取随机字节确定长度 (32-64)
+    if [ -r /dev/urandom ]; then
+        RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
+        if [ -n "$RANDOM_BYTE" ]; then
+            LENGTH=$((32 + RANDOM_BYTE % 33))
+        else
+            LENGTH=48
+        fi
+    else
+        LENGTH=48
+    fi
     
-    # 优先使用 openssl（通常在 debian 中可用）
+    # 生成随机 PSK
     if command -v openssl >/dev/null 2>&1; then
-        openssl rand -base64 48 2>/dev/null | tr -d '\n=' | cut -c1-${LENGTH}
-    # 其次使用 /dev/urandom
+        openssl rand -base64 64 2>/dev/null | tr -d '\n=' | cut -c1-${LENGTH}
     elif [ -r /dev/urandom ]; then
         tr -dc 'A-Za-z0-9+/' </dev/urandom | head -c ${LENGTH}
-    # 最后回退到 sha256sum
     else
-        echo "$(date +%s)$$$(hostname)" | sha256sum | cut -c1-${LENGTH}
+        echo "$(date +%s%N)$$$(hostname)" | sha256sum | cut -c1-${LENGTH}
     fi
 }
 
