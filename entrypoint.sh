@@ -9,12 +9,20 @@ strip_quotes() {
     echo "$1" | sed -e 's/^[[:space:]"'"'"']//' -e 's/[[:space:]"'"'"']$//'
 }
 
+# 随机生成 PSK（使用 openssl rand --base64 32）
 random_psk() {
-    if [ -r /dev/urandom ]; then
-        tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20
-        return
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand --base64 32 2>/dev/null
+    elif [ -r /dev/urandom ]; then
+        tr -dc 'A-Za-z0-9+/' </dev/urandom | head -c 32
+    else
+        echo "$(date +%s)$$" | sha256sum | cut -c1-32
     fi
-    echo "$(date +%s)$$" | md5sum | cut -c1-20
+}
+
+# 随机生成端口（10000-65535）
+random_port() {
+    echo $((10000 + $(od -An -N2 -i /dev/urandom 2>/dev/null || echo $$) % 55536))
 }
 
 # 从文件读取 Snell 版本
@@ -39,110 +47,166 @@ get_major_version() {
     fi
 }
 
-# 处理 LISTEN 配置（v3 版本）
-parse_listen_v3() {
-    local input="$1"
-    # v3 版本只支持单端口
-    local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
-    if [ -z "$port" ]; then
-        port="20000"
-    fi
-    # v3 版本使用 0.0.0.0:端口 格式
-    echo "0.0.0.0:$port"
+# 获取完整版本号（用于比较小版本）
+get_full_version() {
+    VERSION=$(get_snell_version)
+    echo "${VERSION#v}"
 }
 
-# 处理 LISTEN 配置（v4/v5 版本）
-parse_listen_v4() {
-    local input="$1"
-    # v4/v5 版本只支持单端口，使用 :::端口 格式实现双栈
-    local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
-    if [ -z "$port" ]; then
-        port="20000"
-    fi
-    echo ":::$port"
+# 比较版本号（version1 >= version2 返回 true）
+version_ge() {
+    [ "$(printf '%s\n%s' "$2" "$1" | sort -V | head -n1)" = "$2" ]
 }
 
-# 处理 LISTEN 配置（v6+ 版本）
-parse_listen_v6() {
-    local input="$1"
-    local result=""
+# 处理 LISTEN 配置
+parse_listen() {
+    local major="$1"
+    local input="$2"
     
-    # 如果输入为空，使用默认端口
+    # 如果未定义 LISTEN，随机生成端口
     if [ -z "$input" ]; then
-        echo "0.0.0.0:20000, [::]:20000"
+        PORT=$(random_port)
+        echo "ℹ️  LISTEN not set, randomly generated port: $PORT"
+        
+        if [ "$major" -ge 6 ] 2>/dev/null; then
+            # v6+ 版本使用多地址格式
+            echo "0.0.0.0:$PORT, [::]:$PORT"
+        else
+            # v3/v4/v5 版本使用双栈格式（:::port）
+            echo ":::$PORT"
+        fi
         return
     fi
     
-    # 按逗号分割
+    # 用户自定义了 LISTEN
+    local result=""
     IFS=','
     for item in $input; do
-        # 去除首尾空格
         item=$(echo "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        
-        # 跳过空项
         [ -z "$item" ] && continue
         
-        # 检查是否已经是完整地址（包含 : 且不是纯数字）
-        if echo "$item" | grep -q ':' && ! echo "$item" | grep -q '^[0-9]\+$'; then
-            # 已经是完整地址，直接添加
-            [ -n "$result" ] && result="$result, "
-            result="${result}${item}"
+        if [ "$major" -ge 6 ] 2>/dev/null; then
+            # v6+ 版本：支持多地址/多端口
+            if echo "$item" | grep -q ':' && ! echo "$item" | grep -q '^[0-9]\+$'; then
+                [ -n "$result" ] && result="$result, "
+                result="${result}${item}"
+            else
+                [ -n "$result" ] && result="$result, "
+                result="${result}0.0.0.0:${item}, [::]:${item}"
+            fi
         else
-            # 仅端口号，生成 IPv4 和 IPv6 地址
-            [ -n "$result" ] && result="$result, "
-            result="${result}0.0.0.0:${item}, [::]:${item}"
+            # v3/v4/v5 版本：只支持单端口，使用 :::port 格式
+            local port=$(echo "$item" | grep -oE '[0-9]+' | head -n1)
+            if [ -n "$port" ]; then
+                # 如果用户定义了多个端口，只取第一个并给出警告
+                if echo "$input" | grep -q ','; then
+                    echo "⚠️  Warning: Snell v${major} only supports single port, using first port only: $port"
+                fi
+                echo ":::$port"
+                return
+            fi
         fi
     done
     
-    # 如果结果为空（没有有效端口），使用默认值
-    if [ -z "$result" ]; then
-        result="0.0.0.0:20000, [::]:20000"
+    if [ -n "$result" ]; then
+        echo "$result"
+    else
+        # 回退到默认
+        PORT=$(random_port)
+        if [ "$major" -ge 6 ] 2>/dev/null; then
+            echo "0.0.0.0:$PORT, [::]:$PORT"
+        else
+            echo ":::$PORT"
+        fi
     fi
-    
-    echo "$result"
 }
 
 # 主逻辑
-[ -n "${PSK}" ] && PSK_VAL=$(strip_quotes "${PSK}") || PSK_VAL=$(random_psk)
-IPV6_VAL=$(strip_quotes "${IPV6:-false}")
-
-# 获取 Snell 版本（从文件读取）
 SNELL_VERSION=$(get_snell_version)
+FULL_VERSION=$(get_full_version)
 MAJOR_VERSION=$(get_major_version)
-echo "📌 Snell version: $SNELL_VERSION (major: $MAJOR_VERSION)"
+MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
+PATCH_VERSION=$(echo "$FULL_VERSION" | cut -d. -f3)
 
-# 获取 LISTEN 环境变量
-LISTEN_RAW=$(strip_quotes "${LISTEN:-}")
-if [ -z "$LISTEN_RAW" ]; then
-    echo "ℹ️  LISTEN not set, using default port 20000"
+echo "📌 Snell version: $SNELL_VERSION (major: $MAJOR_VERSION, full: $FULL_VERSION)"
+
+# 1. 处理 IPV6（v6+ 默认 true，否则默认 false）
+if [ -n "${IPV6}" ]; then
+    IPV6_VAL=$(strip_quotes "${IPV6}")
+else
+    if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
+        IPV6_VAL="true"
+        echo "ℹ️  IPV6 not set, defaulting to true (Snell v6+)"
+    else
+        IPV6_VAL="false"
+        echo "ℹ️  IPV6 not set, defaulting to false (Snell < v6)"
+    fi
 fi
 
-# 根据版本处理 LISTEN
+# 2. 处理 PSK
+if [ -n "${PSK}" ]; then
+    PSK_VAL=$(strip_quotes "${PSK}")
+else
+    PSK_VAL=$(random_psk)
+    echo "ℹ️  PSK not set, randomly generated"
+fi
+
+# 3. 处理 LISTEN
+LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
+
+# 4. 处理 DNS（v4.1.0 开始支持）
+if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
+    # v4.1.0 之前的版本不支持 DNS 配置项
+    DNS_VAL=""
+elif [ "$MAJOR_VERSION" -lt 4 ]; then
+    # v3 及以下版本不支持 DNS
+    DNS_VAL=""
+else
+    if [ -n "${DNS}" ]; then
+        DNS_VAL=$(strip_quotes "${DNS}")
+    else
+        DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+        echo "ℹ️  DNS not set, using default DNS servers"
+    fi
+fi
+
+# 5. 处理 DNS_IP_PREFERENCE（v6 开始支持）
 if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-    # v6+ 版本
-    echo "🔧 Using Snell v6+ compatible mode (multi-address/multi-port supported)"
-    LISTEN_VAL=$(parse_listen_v6 "$LISTEN_RAW")
-elif [ "$MAJOR_VERSION" -ge 4 ] 2>/dev/null; then
-    # v4/v5 版本
-    echo "🔧 Using Snell v4/v5 compatible mode (single port, dual-stack with :::port)"
-    LISTEN_VAL=$(parse_listen_v4 "$LISTEN_RAW")
-    
-    # 检查旧版本是否尝试使用多端口
-    if [ -n "$LISTEN_RAW" ] && echo "$LISTEN_RAW" | grep -q ','; then
-        echo "⚠️  Warning: Snell v4/v5 only supports single port, using first port only"
+    if [ -n "${DNS_IP_PREFERENCE}" ]; then
+        DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
+    else
+        DNS_IP_PREFERENCE_VAL="prefer-ipv4"
+        echo "ℹ️  DNS_IP_PREFERENCE not set, defaulting to prefer-ipv4"
     fi
 else
-    # v3 及以下版本
-    echo "🔧 Using Snell v3 compatible mode (single port, IPv4 only)"
-    LISTEN_VAL=$(parse_listen_v3 "$LISTEN_RAW")
-    
-    # 检查旧版本是否尝试使用多端口
-    if [ -n "$LISTEN_RAW" ] && echo "$LISTEN_RAW" | grep -q ','; then
-        echo "⚠️  Warning: Snell v3 only supports single port, using first port only"
-    fi
+    DNS_IP_PREFERENCE_VAL=""
 fi
 
-# 生成配置
+# 6. 处理 EGRESS_INTERFACE（v5 开始支持）
+if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
+    if [ -n "${EGRESS_INTERFACE}" ]; then
+        EGRESS_INTERFACE_VAL=$(strip_quotes "${EGRESS_INTERFACE}")
+    else
+        EGRESS_INTERFACE_VAL=""
+    fi
+else
+    EGRESS_INTERFACE_VAL=""
+fi
+
+# 7. 处理 OBFS 和 HOST（没有默认值）
+if [ -n "${OBFS}" ]; then
+    OBFS_VAL=$(strip_quotes "${OBFS}")
+else
+    OBFS_VAL=""
+fi
+
+if [ -n "${HOST}" ]; then
+    HOST_VAL=$(strip_quotes "${HOST}")
+else
+    HOST_VAL=""
+fi
+
+# 生成配置文件
 cat > /snell/snell.conf <<EOF
 [snell-server]
 listen = ${LISTEN_VAL}
@@ -150,23 +214,38 @@ psk = ${PSK_VAL}
 ipv6 = ${IPV6_VAL}
 EOF
 
-# 环境变量映射 (DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, OBFS, HOST)
-for var in DNS DNS_IP_PREFERENCE EGRESS_INTERFACE OBFS HOST; do
-    val=$(eval echo "\$$var")
-    if [ -n "$val" ]; then
-        clean_val=$(strip_quotes "$val")
-        key=$(echo "$var" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-        echo "$key = $clean_val" >> /snell/snell.conf
-    fi
-done
+# 添加 DNS（如果支持且有值）
+if [ -n "$DNS_VAL" ]; then
+    echo "dns = $DNS_VAL" >> /snell/snell.conf
+fi
+
+# 添加 DNS_IP_PREFERENCE（如果有值）
+if [ -n "$DNS_IP_PREFERENCE_VAL" ]; then
+    echo "dns-ip-preference = $DNS_IP_PREFERENCE_VAL" >> /snell/snell.conf
+fi
+
+# 添加 EGRESS_INTERFACE（如果有值）
+if [ -n "$EGRESS_INTERFACE_VAL" ]; then
+    echo "egress-interface = $EGRESS_INTERFACE_VAL" >> /snell/snell.conf
+fi
+
+# 添加 OBFS（如果有值）
+if [ -n "$OBFS_VAL" ]; then
+    echo "obfs = $OBFS_VAL" >> /snell/snell.conf
+fi
+
+# 添加 HOST（如果有值）
+if [ -n "$HOST_VAL" ]; then
+    echo "host = $HOST_VAL" >> /snell/snell.conf
+fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cat /snell/snell.conf
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# 启动 snell-server
+# 启动 snell-server（不使用 -l 参数）
 echo "Starting snell-server..."
-./snell-server -c /snell/snell.conf -l "${LOG:-notify}" &
+./snell-server -c /snell/snell.conf &
 SNELL_PID=$!
 
 # 等待子进程退出
