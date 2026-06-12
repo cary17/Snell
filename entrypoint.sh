@@ -193,17 +193,27 @@ else
     EGRESS_INTERFACE_VAL=""
 fi
 
-# 7. 处理 OBFS 和 HOST（没有默认值）
-if [ -n "${OBFS}" ]; then
-    OBFS_VAL=$(strip_quotes "${OBFS}")
+# 7. 处理 OBFS 和 HOST（v6 及以上版本不支持）
+if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
+    # v5 及以下版本支持 OBFS 和 HOST
+    if [ -n "${OBFS}" ]; then
+        OBFS_VAL=$(strip_quotes "${OBFS}")
+    else
+        OBFS_VAL=""
+    fi
+    
+    if [ -n "${HOST}" ]; then
+        HOST_VAL=$(strip_quotes "${HOST}")
+    else
+        HOST_VAL=""
+    fi
 else
+    # v6+ 版本不支持 OBFS 和 HOST
     OBFS_VAL=""
-fi
-
-if [ -n "${HOST}" ]; then
-    HOST_VAL=$(strip_quotes "${HOST}")
-else
     HOST_VAL=""
+    if [ -n "${OBFS}" ] || [ -n "${HOST}" ]; then
+        echo "⚠️  Warning: OBFS and HOST are not supported in Snell v${MAJOR_VERSION}+, ignoring these settings"
+    fi
 fi
 
 # 生成配置文件
@@ -229,12 +239,12 @@ if [ -n "$EGRESS_INTERFACE_VAL" ]; then
     echo "egress-interface = $EGRESS_INTERFACE_VAL" >> /snell/snell.conf
 fi
 
-# 添加 OBFS（如果有值）
+# 添加 OBFS（仅 v5 及以下版本且如果有值）
 if [ -n "$OBFS_VAL" ]; then
     echo "obfs = $OBFS_VAL" >> /snell/snell.conf
 fi
 
-# 添加 HOST（如果有值）
+# 添加 HOST（仅 v5 及以下版本且如果有值）
 if [ -n "$HOST_VAL" ]; then
     echo "host = $HOST_VAL" >> /snell/snell.conf
 fi
