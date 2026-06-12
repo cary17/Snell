@@ -67,8 +67,6 @@ parse_listen() {
     # 如果未定义 LISTEN，随机生成端口
     if [ -z "$input" ]; then
         PORT=$(random_port)
-        # 输出提示信息到 stderr，避免污染 stdout
-        echo "ℹ️  LISTEN not set, randomly generated port: $PORT" >&2
         
         if [ "$major" -ge 6 ] 2>/dev/null; then
             # v6+ 版本使用多地址格式
@@ -115,7 +113,6 @@ parse_listen() {
     else
         # 回退到默认
         PORT=$(random_port)
-        echo "ℹ️  LISTEN not set, using fallback port: $PORT" >&2
         if [ "$major" -ge 6 ] 2>/dev/null; then
             printf "%s" "0.0.0.0:$PORT, [::]:$PORT"
         else
@@ -130,19 +127,14 @@ FULL_VERSION=$(get_full_version)
 MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
 
-# 显示版本信息（输出到 stderr）
-echo "📌 Snell version: $SNELL_VERSION (major: $MAJOR_VERSION, full: $FULL_VERSION)" >&2
-
 # 1. 处理 IPV6（v6+ 默认 true，否则默认 false）
 if [ -n "${IPV6}" ]; then
     IPV6_VAL=$(strip_quotes "${IPV6}")
 else
     if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
         IPV6_VAL="true"
-        echo "ℹ️  IPV6 not set, defaulting to true (Snell v6+)" >&2
     else
         IPV6_VAL="false"
-        echo "ℹ️  IPV6 not set, defaulting to false (Snell < v6)" >&2
     fi
 fi
 
@@ -151,10 +143,9 @@ if [ -n "${PSK}" ]; then
     PSK_VAL=$(strip_quotes "${PSK}")
 else
     PSK_VAL=$(random_psk)
-    echo "ℹ️  PSK not set, randomly generated" >&2
 fi
 
-# 3. 处理 LISTEN（注意：函数内部的提示已输出到 stderr）
+# 3. 处理 LISTEN
 LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
 
 # 4. 处理 DNS（v4.1.0 开始支持）
@@ -169,7 +160,6 @@ else
         DNS_VAL=$(strip_quotes "${DNS}")
     else
         DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
-        echo "ℹ️  DNS not set, using default DNS servers" >&2
     fi
 fi
 
@@ -179,7 +169,6 @@ if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
         DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
     else
         DNS_IP_PREFERENCE_VAL="prefer-ipv4"
-        echo "ℹ️  DNS_IP_PREFERENCE not set, defaulting to prefer-ipv4" >&2
     fi
 else
     DNS_IP_PREFERENCE_VAL=""
@@ -214,9 +203,6 @@ else
     # v6+ 版本不支持 OBFS 和 HOST
     OBFS_VAL=""
     HOST_VAL=""
-    if [ -n "${OBFS}" ] || [ -n "${HOST}" ]; then
-        echo "⚠️  Warning: OBFS and HOST are not supported in Snell v${MAJOR_VERSION}+, ignoring these settings" >&2
-    fi
 fi
 
 # 生成配置文件
@@ -252,10 +238,10 @@ if [ -n "$HOST_VAL" ]; then
     echo "host = $HOST_VAL" >> /snell/snell.conf
 fi
 
-# 显示配置文件内容（输出到 stderr）
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-cat /snell/snell.conf >&2
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+# 显示配置文件内容
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cat /snell/snell.conf
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # 启动 snell-server
 ./snell-server -c /snell/snell.conf &
