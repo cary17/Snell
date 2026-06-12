@@ -212,10 +212,10 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/snell:latest
+            ghcr.io/${{ github.repository_owner }}/snell:v${{ needs.check-version.outputs.major_version }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', env.DOCKER_HUB_USERNAME) || '' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:v{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.major_version) || '' }}
 
       - name: 镜像信息输出
         run: |
@@ -228,7 +228,11 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "拉取镜像:"
           echo "docker pull ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}"
+          echo "docker pull ghcr.io/${{ github.repository_owner }}/snell:latest"
+          echo "docker pull ghcr.io/${{ github.repository_owner }}/snell:v${{ needs.check-version.outputs.major_version }}"
           if [ -n "${{ env.DOCKER_HUB_USERNAME }}" ]; then
             echo "docker pull ${{ env.DOCKER_HUB_USERNAME }}/snell:${{ needs.check-version.outputs.version }}"
+            echo "docker pull ${{ env.DOCKER_HUB_USERNAME }}/snell:latest"
+            echo "docker pull ${{ env.DOCKER_HUB_USERNAME }}/snell:v${{ needs.check-version.outputs.major_version }}"
           fi
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
