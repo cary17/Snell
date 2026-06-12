@@ -49,38 +49,14 @@ FROM debian:${BASE_TAG}
 COPY --from=builder /tmp/snell-version /snell-version
 COPY --from=builder /tmp/snell-major-version /snell-major-version
 
-# 根据版本安装依赖
+# 安装基础依赖（ca-certificates 仍需要）
 RUN set -ex && \
-    MAJOR_VERSION=$(cat /snell-major-version) && \
-    echo "Building for Snell version: $(cat /snell-version), major: ${MAJOR_VERSION}" && \
-    echo "deb http://deb.debian.org/debian bullseye main" > /etc/apt/sources.list.d/bullseye.list && \
+    echo "Building for Snell version: $(cat /snell-version), major: $(cat /snell-major-version)" && \
     apt-get update && \
-    if [ "$MAJOR_VERSION" -ge 6 ]; then \
-        echo "Installing dependencies for Snell v6+"; \
-        apt-get install -y --no-install-recommends \
-            ca-certificates \
-            libc-ares2 \
-            libssl1.1 \
-            libuv1 \
-            libsodium23; \
-    elif [ "$MAJOR_VERSION" -ge 4 ]; then \
-        echo "Installing dependencies for Snell v4/v5"; \
-        apt-get install -y --no-install-recommends \
-            ca-certificates \
-            libc-ares2 \
-            libuv1 \
-            libsodium23 \
-            libssl1.1; \
-    else \
-        echo "Installing dependencies for Snell v3"; \
-        apt-get install -y --no-install-recommends \
-            ca-certificates \
-            libc-ares2 \
-            libuv1 \
-            libsodium23; \
-    fi && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
-    rm -f /etc/apt/sources.list.d/bullseye.list
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+    && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
