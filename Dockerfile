@@ -5,7 +5,7 @@ ARG TARGETARCH
 ARG SNELL_VERSION
 ARG GITHUB_REPOSITORY
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip openssl && rm -rf /var/lib/apt/lists/*
 
 RUN set -ex && \
     case "${TARGETARCH}" in \
@@ -49,12 +49,13 @@ FROM debian:${BASE_TAG}
 COPY --from=builder /tmp/snell-version /snell-version
 COPY --from=builder /tmp/snell-major-version /snell-major-version
 
-# 安装基础依赖（ca-certificates 仍需要）
+# 安装基础依赖（ca-certificates 和 openssl）
 RUN set -ex && \
     echo "Building for Snell version: $(cat /snell-version), major: $(cat /snell-major-version)" && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
+        openssl \
     && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
