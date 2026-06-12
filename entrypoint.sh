@@ -168,7 +168,7 @@ else
     # 3. 处理 LISTEN
     LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
     
-    # 4. 处理 DNS（v4.1.0 开始支持）
+    # 4. 处理 DNS（根据 IPV6 设置决定默认值）
     if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
         # v4.1.0 之前的版本不支持 DNS 配置项
         DNS_VAL=""
@@ -179,7 +179,12 @@ else
         if [ -n "${DNS}" ]; then
             DNS_VAL=$(strip_quotes "${DNS}")
         else
-            DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+            # 根据 IPV6 设置决定默认 DNS
+            if [ "$IPV6_VAL" = "true" ]; then
+                DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+            else
+                DNS_VAL="8.8.8.8, 1.1.1.1"
+            fi
         fi
     fi
     
