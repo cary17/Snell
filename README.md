@@ -8,8 +8,8 @@
 `linux/amd64` | `linux/386` | `linux/arm64` | `linux/arm/v7`
 ```
 ## 快速开始
-```
 # 基础运行（自动生成随机 PSK 和端口）
+```
 docker run -d --name snell --restart always ghcr.io/cary17/snell:latest
 ```
 
