@@ -1,12 +1,10 @@
-```markdown
 # Snell Server Docker Image
 
 支持 Snell v3 到 v6+ 的 Docker 镜像，自动适配不同版本的配置格式。
 
 ## 支持平台
-
 `linux/amd64` | `linux/386` | `linux/arm64` | `linux/arm/v7`
-```
+
 # 快速开始
 ## 基础运行（自动生成随机 PSK 和端口）
 ```
