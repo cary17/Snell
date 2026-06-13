@@ -29,6 +29,7 @@ jobs:
       should_build: ${{ steps.decide.outputs.should_build }}
       debian_tag: ${{ steps.debian.outputs.tag }}
       platforms: ${{ steps.platforms.outputs.list }}
+      is_force: ${{ steps.decide.outputs.is_force }}
 
     steps:
       - uses: actions/checkout@v5
@@ -62,6 +63,32 @@ jobs:
           echo "major_version=${MAJOR}" >> $GITHUB_OUTPUT
           echo "Detected version: ${VERSION} (major: ${MAJOR})"
 
+      - name: 获取已构建版本列表
+        id: built-versions
+        run: |
+          # 从本地仓库获取已构建的版本列表
+          BUILT_FILE="https://raw.githubusercontent.com/${{ github.repository }}/main/.built-versions"
+          echo "Fetching built versions from: $BUILT_FILE"
+          
+          # 尝试获取文件，如果不存在则创建空列表
+          if curl -fsSL "$BUILT_FILE" -o /tmp/built-versions.txt 2>/dev/null; then
+            echo "✅ Built versions file found"
+            cat /tmp/built-versions.txt
+          else
+            echo "⚠️  Built versions file not found, creating new one"
+            echo "" > /tmp/built-versions.txt
+          fi
+          
+          # 检查当前版本是否已构建
+          CURRENT_VERSION="${{ steps.version.outputs.version }}"
+          if grep -q "^${CURRENT_VERSION}$" /tmp/built-versions.txt 2>/dev/null; then
+            echo "version_exists=true" >> $GITHUB_OUTPUT
+            echo "Version $CURRENT_VERSION already built"
+          else
+            echo "version_exists=false" >> $GITHUB_OUTPUT
+            echo "Version $CURRENT_VERSION is new"
+          fi
+
       - name: 检测可用平台
         id: platforms
         run: |
@@ -69,39 +96,93 @@ jobs:
           V_NUM="${VERSION#v}"
           MAJOR_VERSION="${{ steps.version.outputs.major_version }}"
           BASE_URL="https://dl.nssurge.com/snell"
+          LOCAL_BASE_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/Version"
           PLATFORMS=""
-
-          # v3 版本从本地仓库检测
-          if [ "$MAJOR_VERSION" = "3" ]; then
-            echo "Detecting platforms for Snell v3 from local repository..."
-            for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
-              DOCKER_PLAT="${entry%%:*}"
-              ARCH="${entry##*:}"
-              FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
-              # 检查本地仓库是否存在该文件
-              if curl -fsSL --head "https://raw.githubusercontent.com/${{ github.repository }}/main/Version/v${V_NUM}/${FILE}" > /dev/null 2>&1; then
-                PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
-                echo "✅ ${DOCKER_PLAT} (${FILE}) found in local repo"
-              else
-                echo "⏭️  ${DOCKER_PLAT} 不可用 (文件不存在于本地仓库，跳过)"
-              fi
-            done
-          else
-            # v4+ 版本从官网检测
-            echo "Detecting platforms for Snell v${MAJOR_VERSION} from official website..."
-            for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
-              DOCKER_PLAT="${entry%%:*}"
-              ARCH="${entry##*:}"
-              FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
-              STATUS=$(curl -o /dev/null -s -w "%{http_code}" --head "${BASE_URL}/${FILE}")
-              if [ "$STATUS" = "200" ]; then
-                PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
-                echo "✅ ${DOCKER_PLAT} (${FILE})"
-              else
-                echo "⏭️  ${DOCKER_PLAT} 不可用 (HTTP ${STATUS}，跳过)"
-              fi
-            done
+          
+          # 判断是否为测试版（包含字母，如 6.0.0b1）
+          IS_BETA=false
+          if echo "$V_NUM" | grep -q '[a-z]'; then
+            IS_BETA=true
+            echo "📌 Beta version detected: $VERSION (no local backup)"
           fi
+
+          echo "Detecting platforms for Snell v${MAJOR_VERSION}..."
+          
+          for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
+            DOCKER_PLAT="${entry%%:*}"
+            ARCH="${entry##*:}"
+            FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
+            FOUND=false
+            
+            # 非测试版：尝试从官方下载
+            if [ "$IS_BETA" = "false" ]; then
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "Checking $DOCKER_PLAT: $FILE"
+              
+              # 1. 强制 IPv4 + 超时重试
+              echo "📡 Attempt 1: IPv4 with timeout/retry..."
+              if curl -4 -o /dev/null -s -w "%{http_code}" \
+                --connect-timeout 10 \
+                --max-time 30 \
+                --retry 3 \
+                --retry-delay 5 \
+                --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
+                FOUND=true
+                echo "✅ ${DOCKER_PLAT} from official (IPv4)"
+              else
+                # 2. 尝试 IPv6
+                echo "📡 Attempt 2: IPv6 with timeout/retry..."
+                if curl -6 -o /dev/null -s -w "%{http_code}" \
+                  --connect-timeout 10 \
+                  --max-time 30 \
+                  --retry 3 \
+                  --retry-delay 5 \
+                  --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
+                  FOUND=true
+                  echo "✅ ${DOCKER_PLAT} from official (IPv6)"
+                else
+                  # 3. 官方都失败，使用本地仓库备份
+                  echo "📡 Attempt 3: Official failed, trying local repository..."
+                  if curl -fsSL --head --connect-timeout 10 --max-time 30 \
+                    "${LOCAL_BASE_URL}/v${V_NUM}/${FILE}" > /dev/null 2>&1; then
+                    FOUND=true
+                    echo "✅ ${DOCKER_PLAT} from local repository"
+                  else
+                    echo "❌ ${DOCKER_PLAT} not available anywhere"
+                  fi
+                fi
+              fi
+            else
+              # 测试版：只能从官方下载，没有本地备份
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "Checking $DOCKER_PLAT (beta): $FILE"
+              
+              # 尝试 IPv4
+              if curl -4 -o /dev/null -s -w "%{http_code}" \
+                --connect-timeout 10 \
+                --max-time 30 \
+                --retry 3 \
+                --retry-delay 5 \
+                --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
+                FOUND=true
+                echo "✅ ${DOCKER_PLAT} from official (IPv4)"
+              elif curl -6 -o /dev/null -s -w "%{http_code}" \
+                --connect-timeout 10 \
+                --max-time 30 \
+                --retry 3 \
+                --retry-delay 5 \
+                --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
+                FOUND=true
+                echo "✅ ${DOCKER_PLAT} from official (IPv6)"
+              else
+                echo "❌ ${DOCKER_PLAT} not available from official"
+              fi
+            fi
+            
+            if [ "$FOUND" = "true" ]; then
+              PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
+            fi
+          done
 
           if [ -z "$PLATFORMS" ]; then
             echo "❌ No platforms available for this version"
@@ -109,41 +190,34 @@ jobs:
           fi
           
           echo "list=${PLATFORMS}" >> $GITHUB_OUTPUT
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "Available platforms: ${PLATFORMS}"
-
-      - name: 获取 GHCR 现有版本
-        id: ghcr
-        run: |
-          TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/snell:pull" | jq -r '.token // empty')
-          GHCR_V="v0.0.0"
-          if [ -n "$TOKEN" ]; then
-            GHCR_V=$(curl -fsSL -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/${{ github.repository_owner }}/snell/tags/list \
-              | jq -r '.tags[]?' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+([a-z][0-9]*)?$' | sort -V | tail -n1 || echo "v0.0.0")
-          fi
-          echo "ghcr_version=$GHCR_V" >> $GITHUB_OUTPUT
-          echo "Current GHCR version: $GHCR_V"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 版本比对与决策
         id: decide
         run: |
           OFFICIAL="${{ steps.version.outputs.version }}"
-          CURRENT="${{ steps.ghcr.outputs.ghcr_version }}"
+          VERSION_EXISTS="${{ steps.built-versions.outputs.version_exists }}"
+          FORCE_BUILD="${{ github.event.inputs.force }}"
           
-          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+          echo "Official version: $OFFICIAL"
+          echo "Version exists in records: $VERSION_EXISTS"
+          echo "Force build: $FORCE_BUILD"
+          
+          # 判断是否需要构建
+          if [ "$FORCE_BUILD" = "true" ]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "is_force=true" >> $GITHUB_OUTPUT
             echo "Force build enabled"
-          elif [ "$OFFICIAL" != "$CURRENT" ]; then
-            HIGHEST=$(printf '%s\n%s' "$OFFICIAL" "$CURRENT" | sort -V | tail -n1)
-            if [ "$HIGHEST" == "$OFFICIAL" ]; then
-              echo "should_build=true" >> $GITHUB_OUTPUT
-              echo "New version available: $OFFICIAL (current: $CURRENT)"
-            else
-              echo "should_build=false" >> $GITHUB_OUTPUT
-              echo "Current version $CURRENT is newer or equal to $OFFICIAL"
-            fi
+          elif [ "$VERSION_EXISTS" = "false" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "is_force=false" >> $GITHUB_OUTPUT
+            echo "New version available: $OFFICIAL"
           else
             echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "Version $OFFICIAL already exists"
+            echo "is_force=false" >> $GITHUB_OUTPUT
+            echo "Version $OFFICIAL already built, skipping"
           fi
 
   build-and-push:
@@ -151,14 +225,16 @@ jobs:
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write  # 需要写入权限来更新 .built-versions 文件
       packages: write
     env:
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
       DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
     steps:
       - uses: actions/checkout@v5
-      
+        with:
+          fetch-depth: 0  # 获取完整历史，以便提交
+        
       - name: 设置 QEMU 模拟器
         uses: docker/setup-qemu-action@v4
       
@@ -200,6 +276,7 @@ jobs:
           fi
 
       - name: 构建并推送镜像
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -216,6 +293,8 @@ jobs:
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', env.DOCKER_HUB_USERNAME) || '' }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:v{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.major_version) || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: 镜像信息输出
         run: |
@@ -236,3 +315,37 @@ jobs:
             echo "docker pull ${{ env.DOCKER_HUB_USERNAME }}/snell:v${{ needs.check-version.outputs.major_version }}"
           fi
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: 记录已构建版本
+        if: needs.check-version.outputs.is_force != 'true'  # 强制构建不记录
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          BUILT_FILE=".built-versions"
+          
+          # 配置 git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 拉取最新代码
+          git pull origin main
+          
+          # 如果文件不存在，创建它
+          if [ ! -f "$BUILT_FILE" ]; then
+            echo "# Snell built versions record" > "$BUILT_FILE"
+            echo "# Format: vX.X.X" >> "$BUILT_FILE"
+            echo "" >> "$BUILT_FILE"
+          fi
+          
+          # 检查版本是否已记录（防止重复）
+          if ! grep -q "^${VERSION}$" "$BUILT_FILE"; then
+            # 追加新版本
+            echo "$VERSION" >> "$BUILT_FILE"
+            echo "✅ Added $VERSION to $BUILT_FILE"
+            
+            # 提交并推送
+            git add "$BUILT_FILE"
+            git commit -m "chore: record built snell version $VERSION"
+            git push origin main
+          else
+            echo "⚠️  Version $VERSION already recorded, skipping"
+          fi
