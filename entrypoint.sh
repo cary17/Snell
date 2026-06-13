@@ -43,7 +43,6 @@ ping_ipv4() {
     local count="${2:-1}"
     local timeout="${3:-2}"
     
-    # 使用 ping 命令，发送1个包，超时2秒
     if command -v ping >/dev/null 2>&1; then
         if ping -4 -c $count -W $timeout "$target" >/dev/null 2>&1; then
             return 0
@@ -58,7 +57,6 @@ ping_ipv6() {
     local count="${2:-1}"
     local timeout="${3:-2}"
     
-    # 使用 ping 命令，发送1个包，超时2秒
     if command -v ping >/dev/null 2>&1; then
         if ping -6 -c $count -W $timeout "$target" >/dev/null 2>&1; then
             return 0
@@ -67,7 +65,7 @@ ping_ipv6() {
     return 1
 }
 
-# 检测 IPv4 网络是否可用（测试多个 DNS 服务器）
+# 检测 IPv4 网络是否可用
 check_ipv4_available() {
     local ipv4_servers="8.8.8.8 1.1.1.1 119.29.29.29 223.5.5.5"
     local success_count=0
@@ -77,23 +75,16 @@ check_ipv4_available() {
         total_count=$((total_count + 1))
         if ping_ipv4 "$server" 1 2; then
             success_count=$((success_count + 1))
-            echo "✅ IPv4: $server reachable" >&2
-        else
-            echo "❌ IPv4: $server unreachable" >&2
         fi
     done
     
-    # 至少有一个服务器能通就认为 IPv4 可用
     if [ $success_count -gt 0 ]; then
-        echo "ℹ️  IPv4 available ($success_count/$total_count servers reachable)" >&2
         return 0
-    else
-        echo "❌ IPv4 not available (0/$total_count servers reachable)" >&2
-        return 1
     fi
+    return 1
 }
 
-# 检测 IPv6 网络是否可用（测试多个 DNS 服务器）
+# 检测 IPv6 网络是否可用
 check_ipv6_available() {
     local ipv6_servers="2402:4e00:: 2400:3200::1 2001:4860:4860::8888 2606:4700:4700::1111"
     local success_count=0
@@ -103,19 +94,37 @@ check_ipv6_available() {
         total_count=$((total_count + 1))
         if ping_ipv6 "$server" 1 2; then
             success_count=$((success_count + 1))
-            echo "✅ IPv6: [$server] reachable" >&2
-        else
-            echo "❌ IPv6: [$server] unreachable" >&2
         fi
     done
     
-    # 至少有一个服务器能通就认为 IPv6 可用
     if [ $success_count -gt 0 ]; then
-        echo "ℹ️  IPv6 available ($success_count/$total_count servers reachable)" >&2
         return 0
+    fi
+    return 1
+}
+
+# 获取 DNS 值（根据网络检测结果）
+get_dns_value() {
+    local ipv4_ok=false
+    local ipv6_ok=false
+    
+    if check_ipv4_available; then
+        ipv4_ok=true
+    fi
+    
+    if check_ipv6_available; then
+        ipv6_ok=true
+    fi
+    
+    if $ipv4_ok && $ipv6_ok; then
+        echo "8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+    elif $ipv4_ok; then
+        echo "8.8.8.8, 1.1.1.1"
+    elif $ipv6_ok; then
+        echo "2001:4860:4860::8888, 2606:4700:4700::1111"
     else
-        echo "❌ IPv6 not available (0/$total_count servers reachable)" >&2
-        return 1
+        # 都不可用，默认 IPv4 DNS
+        echo "8.8.8.8, 1.1.1.1"
     fi
 }
 
@@ -124,35 +133,22 @@ detect_dns_ip_preference() {
     local ipv4_available=false
     local ipv6_available=false
     
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-    echo "🔍 Testing IPv4 connectivity..." >&2
     if check_ipv4_available; then
         ipv4_available=true
     fi
     
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-    echo "🔍 Testing IPv6 connectivity..." >&2
     if check_ipv6_available; then
         ipv6_available=true
     fi
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
     
     # 根据检测结果决定默认值
     if $ipv6_available && $ipv4_available; then
-        # 双栈都通，默认 prefer-ipv4
-        echo "ℹ️  Dual-stack available, default: prefer-ipv4" >&2
         echo "prefer-ipv4"
     elif $ipv6_available; then
-        # 只有 IPv6 通
-        echo "ℹ️  Only IPv6 available, default: prefer-ipv6" >&2
         echo "prefer-ipv6"
     elif $ipv4_available; then
-        # 只有 IPv4 通，使用 prefer-ipv4（不用 ipv4-only）
-        echo "ℹ️  Only IPv4 available, default: prefer-ipv4" >&2
         echo "prefer-ipv4"
     else
-        # 都无法连通，默认 default（由系统决定）
-        echo "⚠️  No network connectivity detected, default: default" >&2
         echo "default"
     fi
 }
@@ -226,7 +222,7 @@ parse_listen() {
             done
             printf "%s" "$result"
         else
-            # v6 以下版本不支持多端口，只使用第一个端口并给出警告
+            # v6 以下版本不支持多端口，只使用第一个端口
             local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
             printf "%s" ":::$port"
         fi
@@ -266,14 +262,12 @@ else
         # 获取 DNS_IP_PREFERENCE 值
         if [ -n "${DNS_IP_PREFERENCE}" ]; then
             DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
-            echo "ℹ️  DNS_IP_PREFERENCE manually set to: $DNS_IP_PREFERENCE_VAL" >&2
         else
             # 自动检测网络环境
-            echo "🔍 Detecting network environment for DNS_IP_PREFERENCE..." >&2
             DNS_IP_PREFERENCE_VAL=$(detect_dns_ip_preference)
         fi
         
-        # 根据 DNS_IP_PREFERENCE 判断是否启用 IPv6（仅用于 DNS 选择，不写入配置文件）
+        # 根据 DNS_IP_PREFERENCE 判断是否启用 IPv6（仅用于后续判断）
         case "$DNS_IP_PREFERENCE_VAL" in
             ipv4-only)
                 IPV6_ENABLED="false"
@@ -286,7 +280,7 @@ else
                 ;;
         esac
     else
-        # v6 以下版本，需要写入 ipv6 配置项
+        # v6 以下版本
         DNS_IP_PREFERENCE_VAL=""
         if [ -n "${IPV6}" ]; then
             IPV6_VAL=$(strip_quotes "${IPV6}")
@@ -306,7 +300,7 @@ else
     # 3. 处理 LISTEN
     LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
     
-    # 4. 处理 DNS（根据 IPV6_ENABLED 和 DNS_IP_PREFERENCE 决定）
+    # 4. 处理 DNS（根据网络检测结果或 IPV6 配置）
     # DNS 支持从 v4.1.0 开始
     if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
         DNS_VAL=""
@@ -317,28 +311,12 @@ else
             # 用户自定义 DNS
             DNS_VAL=$(strip_quotes "${DNS}")
         else
-            # 根据 DNS_IP_PREFERENCE 和 IPV6_ENABLED 自动选择默认 DNS
+            # 根据版本和网络环境自动选择 DNS
             if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-                case "$DNS_IP_PREFERENCE_VAL" in
-                    ipv6-only)
-                        DNS_VAL="2001:4860:4860::8888, 2606:4700:4700::1111"
-                        ;;
-                    ipv4-only)
-                        DNS_VAL="8.8.8.8, 1.1.1.1"
-                        ;;
-                    default|prefer-ipv4|prefer-ipv6)
-                        if [ "$IPV6_ENABLED" = "true" ]; then
-                            DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
-                        else
-                            DNS_VAL="8.8.8.8, 1.1.1.1"
-                        fi
-                        ;;
-                    *)
-                        DNS_VAL="8.8.8.8, 1.1.1.1"
-                        ;;
-                esac
+                # v6+ 版本：根据网络检测结果决定 DNS
+                DNS_VAL=$(get_dns_value)
             else
-                # v3/v4/v5 版本
+                # v3/v4/v5 版本：根据 IPV6 配置决定 DNS
                 if [ "$IPV6_ENABLED" = "true" ]; then
                     DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
                 else
@@ -361,7 +339,6 @@ else
     
     # 6. 处理 OBFS 和 HOST（v6 及以上版本不支持）
     if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
-        # v5 及以下版本支持 OBFS 和 HOST
         if [ -n "${OBFS}" ]; then
             OBFS_VAL=$(strip_quotes "${OBFS}")
         else
@@ -374,7 +351,6 @@ else
             HOST_VAL=""
         fi
     else
-        # v6+ 版本不支持 OBFS 和 HOST
         OBFS_VAL=""
         HOST_VAL=""
     fi
