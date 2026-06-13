@@ -10,7 +10,7 @@
 ## 快速开始
 
 ### 基础运行（自动生成随机 PSK 和端口）
-
+```
 ```bash
 docker run -d \
   --name snell \
