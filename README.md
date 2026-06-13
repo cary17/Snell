@@ -60,7 +60,7 @@ services:
 | `HOST` | 混淆域名 (v6-) | - |
 
 > **注意**：
-> - 仅 v3/v4/v5 版本需要`IPV6` 配置项，v6+ 版本IPv6 行为完全由 `dns-ip-preference` 控制
+> - 仅 v3/v4/v5 版本需要`IPV6` 配置项，v6+ 版本IPv6 行为由 `dns-ip-preference` 控制
 
 ### DNS 默认值说明
 
