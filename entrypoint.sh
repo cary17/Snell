@@ -37,6 +37,126 @@ random_port() {
     echo $((10000 + $(od -An -N2 -i /dev/urandom 2>/dev/null || echo $$) % 55536))
 }
 
+# 使用 ping 测试 IPv4 连通性
+ping_ipv4() {
+    local target="$1"
+    local count="${2:-1}"
+    local timeout="${3:-2}"
+    
+    # 使用 ping 命令，发送1个包，超时2秒
+    if command -v ping >/dev/null 2>&1; then
+        if ping -4 -c $count -W $timeout "$target" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 使用 ping 测试 IPv6 连通性
+ping_ipv6() {
+    local target="$1"
+    local count="${2:-1}"
+    local timeout="${3:-2}"
+    
+    # 使用 ping 命令，发送1个包，超时2秒
+    if command -v ping >/dev/null 2>&1; then
+        if ping -6 -c $count -W $timeout "$target" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 检测 IPv4 网络是否可用（测试多个 DNS 服务器）
+check_ipv4_available() {
+    local ipv4_servers="8.8.8.8 1.1.1.1 119.29.29.29 223.5.5.5"
+    local success_count=0
+    local total_count=0
+    
+    for server in $ipv4_servers; do
+        total_count=$((total_count + 1))
+        if ping_ipv4 "$server" 1 2; then
+            success_count=$((success_count + 1))
+            echo "✅ IPv4: $server reachable" >&2
+        else
+            echo "❌ IPv4: $server unreachable" >&2
+        fi
+    done
+    
+    # 至少有一个服务器能通就认为 IPv4 可用
+    if [ $success_count -gt 0 ]; then
+        echo "ℹ️  IPv4 available ($success_count/$total_count servers reachable)" >&2
+        return 0
+    else
+        echo "❌ IPv4 not available (0/$total_count servers reachable)" >&2
+        return 1
+    fi
+}
+
+# 检测 IPv6 网络是否可用（测试多个 DNS 服务器）
+check_ipv6_available() {
+    local ipv6_servers="2402:4e00:: 2400:3200::1 2001:4860:4860::8888 2606:4700:4700::1111"
+    local success_count=0
+    local total_count=0
+    
+    for server in $ipv6_servers; do
+        total_count=$((total_count + 1))
+        if ping_ipv6 "$server" 1 2; then
+            success_count=$((success_count + 1))
+            echo "✅ IPv6: [$server] reachable" >&2
+        else
+            echo "❌ IPv6: [$server] unreachable" >&2
+        fi
+    done
+    
+    # 至少有一个服务器能通就认为 IPv6 可用
+    if [ $success_count -gt 0 ]; then
+        echo "ℹ️  IPv6 available ($success_count/$total_count servers reachable)" >&2
+        return 0
+    else
+        echo "❌ IPv6 not available (0/$total_count servers reachable)" >&2
+        return 1
+    fi
+}
+
+# 自动检测最佳 DNS_IP_PREFERENCE 设置
+detect_dns_ip_preference() {
+    local ipv4_available=false
+    local ipv6_available=false
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "🔍 Testing IPv4 connectivity..." >&2
+    if check_ipv4_available; then
+        ipv4_available=true
+    fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "🔍 Testing IPv6 connectivity..." >&2
+    if check_ipv6_available; then
+        ipv6_available=true
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    
+    # 根据检测结果决定默认值
+    if $ipv6_available && $ipv4_available; then
+        # 双栈都通，默认 prefer-ipv4
+        echo "ℹ️  Dual-stack available, default: prefer-ipv4" >&2
+        echo "prefer-ipv4"
+    elif $ipv6_available; then
+        # 只有 IPv6 通
+        echo "ℹ️  Only IPv6 available, default: prefer-ipv6" >&2
+        echo "prefer-ipv6"
+    elif $ipv4_available; then
+        # 只有 IPv4 通，使用 prefer-ipv4（不用 ipv4-only）
+        echo "ℹ️  Only IPv4 available, default: prefer-ipv4" >&2
+        echo "prefer-ipv4"
+    else
+        # 都无法连通，默认 default（由系统决定）
+        echo "⚠️  No network connectivity detected, default: default" >&2
+        echo "default"
+    fi
+}
+
 # 从文件读取 Snell 版本
 get_snell_version() {
     if [ -f /snell/snell-version ]; then
@@ -108,7 +228,6 @@ parse_listen() {
         else
             # v6 以下版本不支持多端口，只使用第一个端口并给出警告
             local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
-            echo "⚠️  Warning: Snell v${major} only supports single port, using first port only: $port" >&2
             printf "%s" ":::$port"
         fi
     else
@@ -144,11 +263,14 @@ else
     
     # 1. 处理 DNS_IP_PREFERENCE 和 IPV6 的联动（v6+ 才有效）
     if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-        # 获取 DNS_IP_PREFERENCE 值（默认 prefer-ipv4）
+        # 获取 DNS_IP_PREFERENCE 值
         if [ -n "${DNS_IP_PREFERENCE}" ]; then
             DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
+            echo "ℹ️  DNS_IP_PREFERENCE manually set to: $DNS_IP_PREFERENCE_VAL" >&2
         else
-            DNS_IP_PREFERENCE_VAL="prefer-ipv4"
+            # 自动检测网络环境
+            echo "🔍 Detecting network environment for DNS_IP_PREFERENCE..." >&2
+            DNS_IP_PREFERENCE_VAL=$(detect_dns_ip_preference)
         fi
         
         # 根据 DNS_IP_PREFERENCE 判断是否启用 IPv6（仅用于 DNS 选择，不写入配置文件）
