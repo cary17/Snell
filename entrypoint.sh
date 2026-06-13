@@ -155,27 +155,27 @@ else
             DNS_IP_PREFERENCE_VAL="prefer-ipv4"
         fi
         
-        # 根据 DNS_IP_PREFERENCE 设置 IPV6
+        # 根据 DNS_IP_PREFERENCE 判断是否启用 IPv6（仅用于 DNS 选择，不写入配置文件）
         case "$DNS_IP_PREFERENCE_VAL" in
             ipv4-only)
-                IPV6_VAL="false"
+                IPV6_ENABLED="false"
                 ;;
             default|prefer-ipv4|prefer-ipv6|ipv6-only)
-                IPV6_VAL="true"
+                IPV6_ENABLED="true"
                 ;;
             *)
-                # 无效值，默认 prefer-ipv4 行为
-                IPV6_VAL="true"
+                IPV6_ENABLED="true"
                 ;;
         esac
     else
-        # v6 以下版本，IPV6 默认 false
+        # v6 以下版本，需要写入 ipv6 配置项
         DNS_IP_PREFERENCE_VAL=""
         if [ -n "${IPV6}" ]; then
             IPV6_VAL=$(strip_quotes "${IPV6}")
         else
             IPV6_VAL="false"
         fi
+        IPV6_ENABLED="$IPV6_VAL"
     fi
     
     # 2. 处理 PSK
@@ -188,7 +188,7 @@ else
     # 3. 处理 LISTEN
     LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
     
-    # 4. 处理 DNS（根据 IPV6 和 DNS_IP_PREFERENCE 决定）
+    # 4. 处理 DNS（根据 IPV6_ENABLED 和 DNS_IP_PREFERENCE 决定）
     # DNS 支持从 v4.1.0 开始
     if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
         DNS_VAL=""
@@ -199,7 +199,7 @@ else
             # 用户自定义 DNS
             DNS_VAL=$(strip_quotes "${DNS}")
         else
-            # 根据 DNS_IP_PREFERENCE 和 IPV6 自动选择默认 DNS
+            # 根据 DNS_IP_PREFERENCE 和 IPV6_ENABLED 自动选择默认 DNS
             if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
                 case "$DNS_IP_PREFERENCE_VAL" in
                     ipv6-only)
@@ -209,7 +209,7 @@ else
                         DNS_VAL="8.8.8.8, 1.1.1.1"
                         ;;
                     default|prefer-ipv4|prefer-ipv6)
-                        if [ "$IPV6_VAL" = "true" ]; then
+                        if [ "$IPV6_ENABLED" = "true" ]; then
                             DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
                         else
                             DNS_VAL="8.8.8.8, 1.1.1.1"
@@ -221,7 +221,7 @@ else
                 esac
             else
                 # v4/v5 版本
-                if [ "$IPV6_VAL" = "true" ]; then
+                if [ "$IPV6_ENABLED" = "true" ]; then
                     DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
                 else
                     DNS_VAL="8.8.8.8, 1.1.1.1"
@@ -266,8 +266,12 @@ else
 [snell-server]
 listen = ${LISTEN_VAL}
 psk = ${PSK_VAL}
-ipv6 = ${IPV6_VAL}
 EOF
+    
+    # v6 以下版本才写入 ipv6 配置项
+    if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
+        echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
+    fi
     
     # 添加 DNS（如果支持且有值）
     if [ -n "$DNS_VAL" ]; then
