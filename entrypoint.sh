@@ -146,12 +146,33 @@ else
     MAJOR_VERSION=$(get_major_version)
     MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
     
-    # 1. 处理 IPV6（v6+ 默认 true，否则默认 false）
-    if [ -n "${IPV6}" ]; then
-        IPV6_VAL=$(strip_quotes "${IPV6}")
+    # 1. 处理 DNS_IP_PREFERENCE 和 IPV6 的联动（v6+ 才有效）
+    if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
+        # 获取 DNS_IP_PREFERENCE 值（默认 prefer-ipv4）
+        if [ -n "${DNS_IP_PREFERENCE}" ]; then
+            DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
+        else
+            DNS_IP_PREFERENCE_VAL="prefer-ipv4"
+        fi
+        
+        # 根据 DNS_IP_PREFERENCE 设置 IPV6
+        case "$DNS_IP_PREFERENCE_VAL" in
+            ipv4-only)
+                IPV6_VAL="false"
+                ;;
+            default|prefer-ipv4|prefer-ipv6|ipv6-only)
+                IPV6_VAL="true"
+                ;;
+            *)
+                # 无效值，默认 prefer-ipv4 行为
+                IPV6_VAL="true"
+                ;;
+        esac
     else
-        if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-            IPV6_VAL="true"
+        # v6 以下版本，IPV6 默认 false
+        DNS_IP_PREFERENCE_VAL=""
+        if [ -n "${IPV6}" ]; then
+            IPV6_VAL=$(strip_quotes "${IPV6}")
         else
             IPV6_VAL="false"
         fi
@@ -167,38 +188,49 @@ else
     # 3. 处理 LISTEN
     LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
     
-    # 4. 处理 DNS（根据 IPV6 设置决定默认值）
+    # 4. 处理 DNS（根据 IPV6 和 DNS_IP_PREFERENCE 决定）
+    # DNS 支持从 v4.1.0 开始
     if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
-        # v4.1.0 之前的版本不支持 DNS 配置项
         DNS_VAL=""
     elif [ "$MAJOR_VERSION" -lt 4 ]; then
-        # v3 及以下版本不支持 DNS
         DNS_VAL=""
     else
         if [ -n "${DNS}" ]; then
+            # 用户自定义 DNS
             DNS_VAL=$(strip_quotes "${DNS}")
         else
-            # 根据 IPV6 设置决定默认 DNS
-            if [ "$IPV6_VAL" = "true" ]; then
-                DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+            # 根据 DNS_IP_PREFERENCE 和 IPV6 自动选择默认 DNS
+            if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
+                case "$DNS_IP_PREFERENCE_VAL" in
+                    ipv6-only)
+                        DNS_VAL="2001:4860:4860::8888, 2606:4700:4700::1111"
+                        ;;
+                    ipv4-only)
+                        DNS_VAL="8.8.8.8, 1.1.1.1"
+                        ;;
+                    default|prefer-ipv4|prefer-ipv6)
+                        if [ "$IPV6_VAL" = "true" ]; then
+                            DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+                        else
+                            DNS_VAL="8.8.8.8, 1.1.1.1"
+                        fi
+                        ;;
+                    *)
+                        DNS_VAL="8.8.8.8, 1.1.1.1"
+                        ;;
+                esac
             else
-                DNS_VAL="8.8.8.8, 1.1.1.1"
+                # v4/v5 版本
+                if [ "$IPV6_VAL" = "true" ]; then
+                    DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
+                else
+                    DNS_VAL="8.8.8.8, 1.1.1.1"
+                fi
             fi
         fi
     fi
     
-    # 5. 处理 DNS_IP_PREFERENCE（v6 开始支持）
-    if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-        if [ -n "${DNS_IP_PREFERENCE}" ]; then
-            DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
-        else
-            DNS_IP_PREFERENCE_VAL="prefer-ipv4"
-        fi
-    else
-        DNS_IP_PREFERENCE_VAL=""
-    fi
-    
-    # 6. 处理 EGRESS_INTERFACE（v5 开始支持）
+    # 5. 处理 EGRESS_INTERFACE（v5 开始支持）
     if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
         if [ -n "${EGRESS_INTERFACE}" ]; then
             EGRESS_INTERFACE_VAL=$(strip_quotes "${EGRESS_INTERFACE}")
@@ -209,7 +241,7 @@ else
         EGRESS_INTERFACE_VAL=""
     fi
     
-    # 7. 处理 OBFS 和 HOST（v6 及以上版本不支持）
+    # 6. 处理 OBFS 和 HOST（v6 及以上版本不支持）
     if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
         # v5 及以下版本支持 OBFS 和 HOST
         if [ -n "${OBFS}" ]; then
@@ -242,7 +274,7 @@ EOF
         echo "dns = $DNS_VAL" >> "$CONFIG_FILE"
     fi
     
-    # 添加 DNS_IP_PREFERENCE（如果有值）
+    # 添加 DNS_IP_PREFERENCE（v6+ 且有值）
     if [ -n "$DNS_IP_PREFERENCE_VAL" ]; then
         echo "dns-ip-preference = $DNS_IP_PREFERENCE_VAL" >> "$CONFIG_FILE"
     fi
