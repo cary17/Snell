@@ -11,7 +11,6 @@ strip_quotes() {
 
 # 随机生成 PSK（32-64位随机长度随机字符）
 random_psk() {
-    # 从 /dev/urandom 获取随机字节确定长度 (32-64)
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
         if [ -n "$RANDOM_BYTE" ]; then
@@ -23,11 +22,9 @@ random_psk() {
         LENGTH=48
     fi
     
-    # 使用 /dev/urandom 生成随机 PSK
     if [ -r /dev/urandom ]; then
         tr -dc 'A-Za-z0-9+/' </dev/urandom | head -c ${LENGTH}
     else
-        # 最后回退方案
         echo "$(date +%s%N)$$$(hostname)" | sha256sum | cut -c1-${LENGTH}
     fi
 }
@@ -67,7 +64,7 @@ check_tcp_ipv6() {
 
 # 检测 IPv4 网络是否可用
 check_ipv4_available() {
-    local ipv4_servers="8.8.8.8 1.1.1.1 119.29.29.29 223.5.5.5"
+    local ipv4_servers="8.8.8.8 1.1.1.1"
     
     for server in $ipv4_servers; do
         if check_tcp_ipv4 "$server" 53 1; then
@@ -79,7 +76,7 @@ check_ipv4_available() {
 
 # 检测 IPv6 网络是否可用
 check_ipv6_available() {
-    local ipv6_servers="2001:4860:4860::8888 2606:4700:4700::1111 2400:3200::1 2402:4e00::"
+    local ipv6_servers="2001:4860:4860::8888 2606:4700:4700::1111"
     
     for server in $ipv6_servers; do
         if check_tcp_ipv6 "$server" 53 1; then
@@ -96,16 +93,10 @@ get_dns_value() {
     
     if check_ipv4_available; then
         ipv4_ok=true
-        echo "✅ IPv4 DNS reachable" >&2
-    else
-        echo "❌ IPv4 DNS unreachable" >&2
     fi
     
     if check_ipv6_available; then
         ipv6_ok=true
-        echo "✅ IPv6 DNS reachable" >&2
-    else
-        echo "❌ IPv6 DNS unreachable" >&2
     fi
     
     if $ipv4_ok && $ipv6_ok; then
@@ -115,7 +106,6 @@ get_dns_value() {
     elif $ipv6_ok; then
         echo "2001:4860:4860::8888, 2606:4700:4700::1111"
     else
-        # 都不可用，默认 IPv4 DNS
         echo "8.8.8.8, 1.1.1.1"
     fi
 }
@@ -133,7 +123,6 @@ detect_dns_ip_preference() {
         ipv6_available=true
     fi
     
-    # 根据检测结果决定默认值
     if $ipv6_available && $ipv4_available; then
         echo "prefer-ipv4"
     elif $ipv6_available; then
@@ -167,7 +156,7 @@ get_major_version() {
     fi
 }
 
-# 获取完整版本号（用于比较小版本）
+# 获取完整版本号
 get_full_version() {
     VERSION=$(get_snell_version)
     echo "${VERSION#v}"
@@ -178,32 +167,23 @@ parse_listen() {
     local major="$1"
     local input="$2"
     
-    # 如果未定义 LISTEN，随机生成端口
     if [ -z "$input" ]; then
         PORT=$(random_port)
         if [ "$major" -ge 6 ] 2>/dev/null; then
-            # v6+ 版本使用官方格式
             printf "%s" "0.0.0.0:$PORT, [::]:$PORT"
         else
-            # v3/v4/v5 版本使用双栈格式
             printf "%s" ":::$PORT"
         fi
         return
     fi
     
-    # 用户自定义了 LISTEN
-    # 检查是否已经是完整地址格式（包含 : 且不是纯数字，或者是 ::: 开头）
     if echo "$input" | grep -q ':' && ! echo "$input" | grep -q '^[0-9]\+$'; then
-        # 已经是完整地址，直接使用
         printf "%s" "$input"
         return
     fi
     
-    # 仅端口号，需要生成完整格式
-    # 检查是否包含多个端口（仅 v6+ 支持）
     if echo "$input" | grep -q ','; then
         if [ "$major" -ge 6 ] 2>/dev/null; then
-            # v6+ 版本支持多端口，每个端口生成 0.0.0.0:port, [::]:port 格式
             local result=""
             IFS=','
             for item in $input; do
@@ -214,171 +194,231 @@ parse_listen() {
             done
             printf "%s" "$result"
         else
-            # v6 以下版本不支持多端口，只使用第一个端口
             local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
             printf "%s" ":::$port"
         fi
     else
-        # 单端口
         if [ "$major" -ge 6 ] 2>/dev/null; then
-            # v6+ 版本使用官方格式
             printf "%s" "0.0.0.0:${input}, [::]:${input}"
         else
-            # v3/v4/v5 版本使用双栈格式
             printf "%s" ":::${input}"
         fi
     fi
 }
 
-# 检查配置文件是否已存在
-CONFIG_FILE="/snell/snell.conf"
+# 读取现有配置值
+get_config_value() {
+    local key="$1"
+    grep "^${key} = " "$CONFIG_FILE" 2>/dev/null | sed "s/^${key} = //"
+}
 
-if [ -f "$CONFIG_FILE" ]; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ Existing configuration found, using it"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    cat "$CONFIG_FILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# 更新配置项（如果值有变化）
+update_config() {
+    local key="$1"
+    local new_value="$2"
+    
+    if [ -z "$new_value" ]; then
+        return
+    fi
+    
+    old_value=$(get_config_value "$key")
+    
+    if [ "$old_value" != "$new_value" ]; then
+        # 删除旧配置行，添加新配置行
+        sed -i "/^${key} = /d" "$CONFIG_FILE"
+        echo "${key} = ${new_value}" >> "$CONFIG_FILE"
+    fi
+}
+
+# 主逻辑
+CONFIG_FILE="/snell/snell.conf"
+ENV_HASH_FILE="/snell/.env_hash"
+
+# 获取当前环境变量哈希
+current_env_hash() {
+    echo "${LISTEN:-}${PSK:-}${IPV6:-}${DNS:-}${DNS_IP_PREFERENCE:-}${EGRESS_INTERFACE:-}${OBFS:-}${HOST:-}" | sha256sum | cut -c1-32
+}
+
+# 获取当前配置值（用于比较）
+SNELL_VERSION=$(get_snell_version)
+FULL_VERSION=$(get_full_version)
+MAJOR_VERSION=$(get_major_version)
+MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
+
+# 计算当前期望的配置值（不实际生成文件）
+if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
+    if [ -n "${DNS_IP_PREFERENCE}" ]; then
+        EXPECTED_DNS_IP_PREFERENCE=$(strip_quotes "${DNS_IP_PREFERENCE}")
+    else
+        EXPECTED_DNS_IP_PREFERENCE=$(detect_dns_ip_preference)
+    fi
+    
+    case "$EXPECTED_DNS_IP_PREFERENCE" in
+        ipv4-only) IPV6_ENABLED="false" ;;
+        *) IPV6_ENABLED="true" ;;
+    esac
 else
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "📝 Generating new configuration..."
-    
-    # 主逻辑
-    SNELL_VERSION=$(get_snell_version)
-    FULL_VERSION=$(get_full_version)
-    MAJOR_VERSION=$(get_major_version)
-    MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
-    
-    # 1. 处理 DNS_IP_PREFERENCE 和 IPV6 的联动（v6+ 才有效）
-    if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-        # 获取 DNS_IP_PREFERENCE 值
-        if [ -n "${DNS_IP_PREFERENCE}" ]; then
-            DNS_IP_PREFERENCE_VAL=$(strip_quotes "${DNS_IP_PREFERENCE}")
-            echo "ℹ️  DNS_IP_PREFERENCE manually set to: $DNS_IP_PREFERENCE_VAL" >&2
-        else
-            # 自动检测网络环境
-            echo "🔍 Detecting network environment for DNS_IP_PREFERENCE..." >&2
-            DNS_IP_PREFERENCE_VAL=$(detect_dns_ip_preference)
-        fi
-        
-        # 根据 DNS_IP_PREFERENCE 判断是否启用 IPv6
-        case "$DNS_IP_PREFERENCE_VAL" in
-            ipv4-only)
-                IPV6_ENABLED="false"
-                ;;
-            default|prefer-ipv4|prefer-ipv6|ipv6-only)
-                IPV6_ENABLED="true"
-                ;;
-            *)
-                IPV6_ENABLED="true"
-                ;;
-        esac
+    EXPECTED_DNS_IP_PREFERENCE=""
+    if [ -n "${IPV6}" ]; then
+        IPV6_VAL=$(strip_quotes "${IPV6}")
     else
-        # v6 以下版本
-        DNS_IP_PREFERENCE_VAL=""
-        if [ -n "${IPV6}" ]; then
-            IPV6_VAL=$(strip_quotes "${IPV6}")
-        else
-            IPV6_VAL="false"
-        fi
-        IPV6_ENABLED="$IPV6_VAL"
+        IPV6_VAL="false"
     fi
-    
-    # 2. 处理 PSK
-    if [ -n "${PSK}" ]; then
-        PSK_VAL=$(strip_quotes "${PSK}")
+    IPV6_ENABLED="$IPV6_VAL"
+fi
+
+if [ -n "${PSK}" ]; then
+    EXPECTED_PSK=$(strip_quotes "${PSK}")
+else
+    EXPECTED_PSK=$(random_psk)
+fi
+
+EXPECTED_LISTEN=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
+
+# DNS 配置
+if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
+    EXPECTED_DNS=""
+elif [ "$MAJOR_VERSION" -lt 4 ]; then
+    EXPECTED_DNS=""
+else
+    if [ -n "${DNS}" ]; then
+        EXPECTED_DNS=$(strip_quotes "${DNS}")
     else
-        PSK_VAL=$(random_psk)
-    fi
-    
-    # 3. 处理 LISTEN
-    LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
-    
-    # 4. 处理 DNS
-    if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
-        DNS_VAL=""
-    elif [ "$MAJOR_VERSION" -lt 4 ]; then
-        DNS_VAL=""
-    else
-        if [ -n "${DNS}" ]; then
-            DNS_VAL=$(strip_quotes "${DNS}")
+        if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
+            EXPECTED_DNS=$(get_dns_value)
         else
-            if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-                DNS_VAL=$(get_dns_value)
+            if [ "$IPV6_ENABLED" = "true" ]; then
+                EXPECTED_DNS="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
             else
-                if [ "$IPV6_ENABLED" = "true" ]; then
-                    DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
-                else
-                    DNS_VAL="8.8.8.8, 1.1.1.1"
-                fi
+                EXPECTED_DNS="8.8.8.8, 1.1.1.1"
             fi
         fi
     fi
-    
-    # 5. 处理 EGRESS_INTERFACE（v5 开始支持）
-    if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
-        if [ -n "${EGRESS_INTERFACE}" ]; then
-            EGRESS_INTERFACE_VAL=$(strip_quotes "${EGRESS_INTERFACE}")
-        else
-            EGRESS_INTERFACE_VAL=""
-        fi
-    else
-        EGRESS_INTERFACE_VAL=""
-    fi
-    
-    # 6. 处理 OBFS 和 HOST
-    if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
-        if [ -n "${OBFS}" ]; then
-            OBFS_VAL=$(strip_quotes "${OBFS}")
-        else
-            OBFS_VAL=""
-        fi
-        
-        if [ -n "${HOST}" ]; then
-            HOST_VAL=$(strip_quotes "${HOST}")
-        else
-            HOST_VAL=""
-        fi
-    else
-        OBFS_VAL=""
-        HOST_VAL=""
-    fi
-    
-    # 生成配置文件
-    cat > "$CONFIG_FILE" <<EOF
-[snell-server]
-listen = ${LISTEN_VAL}
-psk = ${PSK_VAL}
-EOF
-    
-    if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
-        echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
-    fi
-    
-    if [ -n "$DNS_VAL" ]; then
-        echo "dns = $DNS_VAL" >> "$CONFIG_FILE"
-    fi
-    
-    if [ -n "$DNS_IP_PREFERENCE_VAL" ]; then
-        echo "dns-ip-preference = $DNS_IP_PREFERENCE_VAL" >> "$CONFIG_FILE"
-    fi
-    
-    if [ -n "$EGRESS_INTERFACE_VAL" ]; then
-        echo "egress-interface = $EGRESS_INTERFACE_VAL" >> "$CONFIG_FILE"
-    fi
-    
-    if [ -n "$OBFS_VAL" ]; then
-        echo "obfs = $OBFS_VAL" >> "$CONFIG_FILE"
-    fi
-    
-    if [ -n "$HOST_VAL" ]; then
-        echo "host = $HOST_VAL" >> "$CONFIG_FILE"
-    fi
-    
-    cat "$CONFIG_FILE"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
 
+if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
+    if [ -n "${EGRESS_INTERFACE}" ]; then
+        EXPECTED_EGRESS_INTERFACE=$(strip_quotes "${EGRESS_INTERFACE}")
+    else
+        EXPECTED_EGRESS_INTERFACE=""
+    fi
+else
+    EXPECTED_EGRESS_INTERFACE=""
+fi
+
+if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
+    if [ -n "${OBFS}" ]; then
+        EXPECTED_OBFS=$(strip_quotes "${OBFS}")
+    else
+        EXPECTED_OBFS=""
+    fi
+    if [ -n "${HOST}" ]; then
+        EXPECTED_HOST=$(strip_quotes "${HOST}")
+    else
+        EXPECTED_HOST=""
+    fi
+else
+    EXPECTED_OBFS=""
+    EXPECTED_HOST=""
+fi
+
+# 检查配置文件是否需要更新
+NEED_UPDATE=false
+CURRENT_HASH=$(current_env_hash)
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    NEED_UPDATE=true
+elif [ -f "$ENV_HASH_FILE" ]; then
+    OLD_HASH=$(cat "$ENV_HASH_FILE" 2>/dev/null)
+    if [ "$CURRENT_HASH" != "$OLD_HASH" ]; then
+        NEED_UPDATE=true
+    fi
+else
+    NEED_UPDATE=true
+fi
+
+if [ "$NEED_UPDATE" = true ]; then
+    # 生成或更新配置文件
+    if [ ! -f "$CONFIG_FILE" ]; then
+        # 创建新配置文件
+        cat > "$CONFIG_FILE" <<EOF
+[snell-server]
+listen = ${EXPECTED_LISTEN}
+psk = ${EXPECTED_PSK}
+EOF
+        if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
+            echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
+        fi
+    else
+        # 更新现有配置
+        update_config "listen" "$EXPECTED_LISTEN"
+        update_config "psk" "$EXPECTED_PSK"
+        
+        if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
+            update_config "ipv6" "$IPV6_VAL"
+        else
+            # v6+ 移除 ipv6 配置项
+            if grep -q "^ipv6 = " "$CONFIG_FILE" 2>/dev/null; then
+                sed -i "/^ipv6 = /d" "$CONFIG_FILE"
+            fi
+        fi
+        
+        # 处理 DNS
+        if [ -z "$EXPECTED_DNS" ]; then
+            if grep -q "^dns = " "$CONFIG_FILE" 2>/dev/null; then
+                sed -i "/^dns = /d" "$CONFIG_FILE"
+            fi
+        else
+            update_config "dns" "$EXPECTED_DNS"
+        fi
+        
+        # 处理 DNS_IP_PREFERENCE
+        if [ -z "$EXPECTED_DNS_IP_PREFERENCE" ]; then
+            if grep -q "^dns-ip-preference = " "$CONFIG_FILE" 2>/dev/null; then
+                sed -i "/^dns-ip-preference = /d" "$CONFIG_FILE"
+            fi
+        else
+            update_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
+        fi
+        
+        # 处理 EGRESS_INTERFACE
+        if [ -z "$EXPECTED_EGRESS_INTERFACE" ]; then
+            if grep -q "^egress-interface = " "$CONFIG_FILE" 2>/dev/null; then
+                sed -i "/^egress-interface = /d" "$CONFIG_FILE"
+            fi
+        else
+            update_config "egress-interface" "$EXPECTED_EGRESS_INTERFACE"
+        fi
+        
+        # 处理 OBFS
+        if [ -z "$EXPECTED_OBFS" ]; then
+            if grep -q "^obfs = " "$CONFIG_FILE" 2>/dev/null; then
+                sed -i "/^obfs = /d" "$CONFIG_FILE"
+            fi
+        else
+            update_config "obfs" "$EXPECTED_OBFS"
+        fi
+        
+        # 处理 HOST
+        if [ -z "$EXPECTED_HOST" ]; then
+            if grep -q "^host = " "$CONFIG_FILE" 2>/dev/null; then
+                sed -i "/^host = /d" "$CONFIG_FILE"
+            fi
+        else
+            update_config "host" "$EXPECTED_HOST"
+        fi
+    fi
+    
+    # 保存环境变量哈希
+    echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
+fi
+
+# 显示配置文件内容
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cat "$CONFIG_FILE"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# 启动 snell-server
 ./snell-server -c "$CONFIG_FILE" &
 SNELL_PID=$!
 
