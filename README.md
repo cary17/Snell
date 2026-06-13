@@ -52,7 +52,7 @@ services:
 |------|------|--------|
 | `LISTEN` | 监听地址/端口 | 随机端口 (10000-65535) |
 | `PSK` | 预共享密钥 | 随机生成 (32-64位) |
-| `IPV6` | 启用 IPv6 (仅 v3/v4/v5) | 默认 false |
+| `IPV6` | 启用 IPv6 ( v3/v4/v5) | 默认 false |
 | `DNS` | DNS 服务器 | 见下方说明 |
 | `DNS_IP_PREFERENCE` | DNS 偏好 (v6+) | `prefer-ipv4` |
 | `EGRESS_INTERFACE` | 出口网卡 (v5+) | - |
