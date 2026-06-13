@@ -212,21 +212,29 @@ get_config_value() {
     grep "^${key} = " "$CONFIG_FILE" 2>/dev/null | sed "s/^${key} = //"
 }
 
-# 更新配置项（如果值有变化）
-update_config() {
+# 设置配置项（添加或更新）
+set_config() {
     local key="$1"
     local new_value="$2"
     
+    # 如果值为空，删除配置项
     if [ -z "$new_value" ]; then
+        if grep -q "^${key} = " "$CONFIG_FILE" 2>/dev/null; then
+            sed -i "/^${key} = /d" "$CONFIG_FILE"
+        fi
         return
     fi
     
     old_value=$(get_config_value "$key")
     
     if [ "$old_value" != "$new_value" ]; then
-        # 删除旧配置行，添加新配置行
-        sed -i "/^${key} = /d" "$CONFIG_FILE"
-        echo "${key} = ${new_value}" >> "$CONFIG_FILE"
+        if grep -q "^${key} = " "$CONFIG_FILE" 2>/dev/null; then
+            # 更新现有配置
+            sed -i "s/^${key} = .*/${key} = ${new_value}/" "$CONFIG_FILE"
+        else
+            # 添加新配置（在 psk 后面插入）
+            sed -i "/^psk = /a ${key} = ${new_value}" "$CONFIG_FILE"
+        fi
     fi
 }
 
@@ -245,7 +253,7 @@ FULL_VERSION=$(get_full_version)
 MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
 
-# 计算当前期望的配置值（不实际生成文件）
+# 计算当前期望的配置值
 if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
     if [ -n "${DNS_IP_PREFERENCE}" ]; then
         EXPECTED_DNS_IP_PREFERENCE=$(strip_quotes "${DNS_IP_PREFERENCE}")
@@ -328,13 +336,34 @@ CURRENT_HASH=$(current_env_hash)
 
 if [ ! -f "$CONFIG_FILE" ]; then
     NEED_UPDATE=true
-elif [ -f "$ENV_HASH_FILE" ]; then
-    OLD_HASH=$(cat "$ENV_HASH_FILE" 2>/dev/null)
-    if [ "$CURRENT_HASH" != "$OLD_HASH" ]; then
+else
+    # 检查必要配置项是否存在
+    if ! grep -q "^listen = " "$CONFIG_FILE" 2>/dev/null; then
         NEED_UPDATE=true
     fi
-else
-    NEED_UPDATE=true
+    if ! grep -q "^psk = " "$CONFIG_FILE" 2>/dev/null; then
+        NEED_UPDATE=true
+    fi
+    
+    # v6+ 检查 dns 配置项
+    if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
+        if [ -n "$EXPECTED_DNS" ] && ! grep -q "^dns = " "$CONFIG_FILE" 2>/dev/null; then
+            NEED_UPDATE=true
+        fi
+        if [ -n "$EXPECTED_DNS_IP_PREFERENCE" ] && ! grep -q "^dns-ip-preference = " "$CONFIG_FILE" 2>/dev/null; then
+            NEED_UPDATE=true
+        fi
+    fi
+    
+    # 检查哈希
+    if [ -f "$ENV_HASH_FILE" ]; then
+        OLD_HASH=$(cat "$ENV_HASH_FILE" 2>/dev/null)
+        if [ "$CURRENT_HASH" != "$OLD_HASH" ]; then
+            NEED_UPDATE=true
+        fi
+    else
+        NEED_UPDATE=true
+    fi
 fi
 
 if [ "$NEED_UPDATE" = true ]; then
@@ -346,68 +375,23 @@ if [ "$NEED_UPDATE" = true ]; then
 listen = ${EXPECTED_LISTEN}
 psk = ${EXPECTED_PSK}
 EOF
-        if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
-            echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
-        fi
-    else
-        # 更新现有配置
-        update_config "listen" "$EXPECTED_LISTEN"
-        update_config "psk" "$EXPECTED_PSK"
-        
-        if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
-            update_config "ipv6" "$IPV6_VAL"
-        else
-            # v6+ 移除 ipv6 配置项
-            if grep -q "^ipv6 = " "$CONFIG_FILE" 2>/dev/null; then
-                sed -i "/^ipv6 = /d" "$CONFIG_FILE"
-            fi
-        fi
-        
-        # 处理 DNS
-        if [ -z "$EXPECTED_DNS" ]; then
-            if grep -q "^dns = " "$CONFIG_FILE" 2>/dev/null; then
-                sed -i "/^dns = /d" "$CONFIG_FILE"
-            fi
-        else
-            update_config "dns" "$EXPECTED_DNS"
-        fi
-        
-        # 处理 DNS_IP_PREFERENCE
-        if [ -z "$EXPECTED_DNS_IP_PREFERENCE" ]; then
-            if grep -q "^dns-ip-preference = " "$CONFIG_FILE" 2>/dev/null; then
-                sed -i "/^dns-ip-preference = /d" "$CONFIG_FILE"
-            fi
-        else
-            update_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
-        fi
-        
-        # 处理 EGRESS_INTERFACE
-        if [ -z "$EXPECTED_EGRESS_INTERFACE" ]; then
-            if grep -q "^egress-interface = " "$CONFIG_FILE" 2>/dev/null; then
-                sed -i "/^egress-interface = /d" "$CONFIG_FILE"
-            fi
-        else
-            update_config "egress-interface" "$EXPECTED_EGRESS_INTERFACE"
-        fi
-        
-        # 处理 OBFS
-        if [ -z "$EXPECTED_OBFS" ]; then
-            if grep -q "^obfs = " "$CONFIG_FILE" 2>/dev/null; then
-                sed -i "/^obfs = /d" "$CONFIG_FILE"
-            fi
-        else
-            update_config "obfs" "$EXPECTED_OBFS"
-        fi
-        
-        # 处理 HOST
-        if [ -z "$EXPECTED_HOST" ]; then
-            if grep -q "^host = " "$CONFIG_FILE" 2>/dev/null; then
-                sed -i "/^host = /d" "$CONFIG_FILE"
-            fi
-        else
-            update_config "host" "$EXPECTED_HOST"
-        fi
     fi
+    
+    # 使用 set_config 统一处理所有配置项（会自动添加缺失的）
+    set_config "listen" "$EXPECTED_LISTEN"
+    set_config "psk" "$EXPECTED_PSK"
+    
+    if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
+        set_config "ipv6" "$IPV6_VAL"
+    else
+        set_config "ipv6" ""  # 删除 ipv6 配置项
+    fi
+    
+    set_config "dns" "$EXPECTED_DNS"
+    set_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
+    set_config "egress-interface" "$EXPECTED_EGRESS_INTERFACE"
+    set_config "obfs" "$EXPECTED_OBFS"
+    set_config "host" "$EXPECTED_HOST"
     
     # 保存环境变量哈希
     echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
