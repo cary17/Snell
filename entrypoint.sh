@@ -73,56 +73,52 @@ parse_listen() {
     # 如果未定义 LISTEN，随机生成端口
     if [ -z "$input" ]; then
         PORT=$(random_port)
-        
         if [ "$major" -ge 6 ] 2>/dev/null; then
-            # v6+ 版本使用多地址格式
+            # v6+ 版本使用官方格式
             printf "%s" "0.0.0.0:$PORT, [::]:$PORT"
         else
-            # v3/v4/v5 版本使用双栈格式（:::port）
+            # v3/v4/v5 版本使用双栈格式
             printf "%s" ":::$PORT"
         fi
         return
     fi
     
     # 用户自定义了 LISTEN
-    local result=""
-    IFS=','
-    for item in $input; do
-        item=$(echo "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        [ -z "$item" ] && continue
-        
+    # 检查是否已经是完整地址格式（包含 : 且不是纯数字，或者是 ::: 开头）
+    if echo "$input" | grep -q ':' && ! echo "$input" | grep -q '^[0-9]\+$'; then
+        # 已经是完整地址，直接使用
+        printf "%s" "$input"
+        return
+    fi
+    
+    # 仅端口号，需要生成完整格式
+    # 检查是否包含多个端口（仅 v6+ 支持）
+    if echo "$input" | grep -q ','; then
         if [ "$major" -ge 6 ] 2>/dev/null; then
-            # v6+ 版本：支持多地址/多端口
-            if echo "$item" | grep -q ':' && ! echo "$item" | grep -q '^[0-9]\+$'; then
-                [ -n "$result" ] && result="$result, "
-                result="${result}${item}"
-            else
+            # v6+ 版本支持多端口，每个端口生成 0.0.0.0:port, [::]:port 格式
+            local result=""
+            IFS=','
+            for item in $input; do
+                item=$(echo "$item" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$item" ] && continue
                 [ -n "$result" ] && result="$result, "
                 result="${result}0.0.0.0:${item}, [::]:${item}"
-            fi
+            done
+            printf "%s" "$result"
         else
-            # v3/v4/v5 版本：只支持单端口，使用 :::port 格式
-            local port=$(echo "$item" | grep -oE '[0-9]+' | head -n1)
-            if [ -n "$port" ]; then
-                # 如果用户定义了多个端口，只取第一个并给出警告
-                if echo "$input" | grep -q ','; then
-                    echo "⚠️  Warning: Snell v${major} only supports single port, using first port only: $port" >&2
-                fi
-                printf "%s" ":::$port"
-                return
-            fi
+            # v6 以下版本不支持多端口，只使用第一个端口并给出警告
+            local port=$(echo "$input" | grep -oE '[0-9]+' | head -n1)
+            echo "⚠️  Warning: Snell v${major} only supports single port, using first port only: $port" >&2
+            printf "%s" ":::$port"
         fi
-    done
-    
-    if [ -n "$result" ]; then
-        printf "%s" "$result"
     else
-        # 回退到默认
-        PORT=$(random_port)
+        # 单端口
         if [ "$major" -ge 6 ] 2>/dev/null; then
-            printf "%s" "0.0.0.0:$PORT, [::]:$PORT"
+            # v6+ 版本使用官方格式
+            printf "%s" "0.0.0.0:${input}, [::]:${input}"
         else
-            printf "%s" ":::$PORT"
+            # v3/v4/v5 版本使用双栈格式
+            printf "%s" ":::${input}"
         fi
     fi
 }
@@ -220,7 +216,7 @@ else
                         ;;
                 esac
             else
-                # v4/v5 版本
+                # v3/v4/v5 版本
                 if [ "$IPV6_ENABLED" = "true" ]; then
                     DNS_VAL="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
                 else
