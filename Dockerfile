@@ -44,15 +44,14 @@ RUN set -ex && \
 
 FROM debian:${BASE_TAG}
 
-# 从构建阶段复制版本信息
 COPY --from=builder /tmp/snell-version /snell-version
 COPY --from=builder /tmp/snell-major-version /snell-major-version
 
-# 安装运行时依赖（最小化安装）
+# 安装运行时依赖（ca-certificates 和 netcat-openbsd）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
-        iputils-ping \
+        netcat-openbsd \
     && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* /var/tmp/*
@@ -65,7 +64,6 @@ COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && \
     chmod 777 /snell
 
-# 验证 snell-server 依赖
 RUN ldd snell-server | grep -q "not found" && echo "Warning: Missing dependencies" || true
 
 ENTRYPOINT ["/snell/entrypoint.sh"]
