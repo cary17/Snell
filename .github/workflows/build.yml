@@ -225,7 +225,7 @@ jobs:
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # 需要写入权限来更新 .built-versions 文件
+      contents: write
       packages: write
     env:
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0  # 获取完整历史，以便提交
+          fetch-depth: 0
         
       - name: 设置 QEMU 模拟器
         uses: docker/setup-qemu-action@v4
@@ -275,7 +275,7 @@ jobs:
             echo "仓库 $USER/$REPO_NAME 已存在"
           fi
 
-      - name: 构建并推送镜像
+      - name: 构建并推送镜像（禁用缓存）
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -293,8 +293,9 @@ jobs:
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', env.DOCKER_HUB_USERNAME) || '' }}
             ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:v{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.major_version) || '' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 禁用缓存
+          cache-from: type=local,src=/dev/null
+          no-cache: true
 
       - name: 镜像信息输出
         run: |
@@ -317,32 +318,26 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: 记录已构建版本
-        if: needs.check-version.outputs.is_force != 'true'  # 强制构建不记录
+        if: needs.check-version.outputs.is_force != 'true'
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
           BUILT_FILE=".built-versions"
           
-          # 配置 git
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 拉取最新代码
           git pull origin main
           
-          # 如果文件不存在，创建它
           if [ ! -f "$BUILT_FILE" ]; then
             echo "# Snell built versions record" > "$BUILT_FILE"
             echo "# Format: vX.X.X" >> "$BUILT_FILE"
             echo "" >> "$BUILT_FILE"
           fi
           
-          # 检查版本是否已记录（防止重复）
           if ! grep -q "^${VERSION}$" "$BUILT_FILE"; then
-            # 追加新版本
             echo "$VERSION" >> "$BUILT_FILE"
             echo "✅ Added $VERSION to $BUILT_FILE"
             
-            # 提交并推送
             git add "$BUILT_FILE"
             git commit -m "chore: record built snell version $VERSION"
             git push origin main
