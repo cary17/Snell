@@ -116,9 +116,10 @@ test_ipv6_connectivity() {
 
 # 获取 DNS 值
 get_dns_value() {
-    local network_env
+    set +e
     detect_network_env
-    network_env=$?
+    local network_env=$?
+    set -e
     
     if [ $network_env -eq 2 ]; then
         echo "8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
@@ -155,9 +156,10 @@ get_dns_value() {
 
 # 获取 DNS_IP_PREFERENCE
 get_dns_ip_preference() {
-    local network_env
+    set +e
     detect_network_env
-    network_env=$?
+    local network_env=$?
+    set -e
     
     if [ $network_env -eq 2 ]; then
         echo "prefer-ipv4"
