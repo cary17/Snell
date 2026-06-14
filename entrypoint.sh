@@ -38,29 +38,24 @@ random_port() {
 # 网络检测函数（使用 nc，兼容所有版本）
 # ============================================================
 
-# 使用 nc 测试连通性（兼容所有 nc 版本，支持 IPv6 括号）
+# 使用 nc 测试连通性
 test_connectivity() {
     local target="$1"
     local port="${2:-80}"
     local timeout="${3:-2}"
     
     if command -v nc >/dev/null 2>&1; then
-        # IPv6 地址需要括号
         if echo "$target" | grep -q ':'; then
-            # 尝试带 -6 参数（OpenBSD 版本）
             if nc -6 -z -w $timeout "[$target]" "$port" 2>/dev/null; then
                 return 0
             fi
-            # 不带参数（busybox 版本）
             if nc -z -w $timeout "[$target]" "$port" 2>/dev/null; then
                 return 0
             fi
         else
-            # 尝试带 -4 参数（OpenBSD 版本）
             if nc -4 -z -w $timeout "$target" "$port" 2>/dev/null; then
                 return 0
             fi
-            # 不带参数（busybox 版本）
             if nc -z -w $timeout "$target" "$port" 2>/dev/null; then
                 return 0
             fi
@@ -69,7 +64,7 @@ test_connectivity() {
     return 1
 }
 
-# 测试 Google 连通性（国际网络判断唯一依据）
+# 测试 Google 连通性
 test_google() {
     test_connectivity "google.com" 80 2
 }
@@ -84,14 +79,14 @@ test_domestic() {
     return 1
 }
 
-# 检测网络环境（使用 || true 防止 set -e 触发退出）
+# 检测网络环境（返回值：1=国外, 0=国内, 2=无网络）
 detect_network_env() {
     if test_google; then
-        return 1  # 国外
+        return 1
     elif test_domestic; then
-        return 0  # 国内
+        return 0
     else
-        return 2  # 无网络
+        return 2
     fi
 }
 
@@ -119,12 +114,12 @@ test_ipv6_connectivity() {
 # DNS 值生成函数
 # ============================================================
 
-# 获取 DNS 值（根据网络环境+连通性）
+# 获取 DNS 值
 get_dns_value() {
-    detect_network_env || true
-    local network_env=$?
+    local network_env
+    detect_network_env
+    network_env=$?
     
-    # 无网络时，返回完整的国际 DNS
     if [ $network_env -eq 2 ]; then
         echo "8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
         return
@@ -139,10 +134,10 @@ get_dns_value() {
     local ipv4_dns=""
     local ipv6_dns=""
     
-    if [ $network_env -eq 0 ]; then  # 国内
+    if [ $network_env -eq 0 ]; then
         ipv4_dns="119.29.29.29, 223.5.5.5"
         ipv6_dns="2402:4e00::, 2400:3200::1"
-    else  # 国外
+    else
         ipv4_dns="8.8.8.8, 1.1.1.1"
         ipv6_dns="2001:4860:4860::8888, 2606:4700:4700::1111"
     fi
@@ -160,8 +155,9 @@ get_dns_value() {
 
 # 获取 DNS_IP_PREFERENCE
 get_dns_ip_preference() {
-    detect_network_env || true
-    local network_env=$?
+    local network_env
+    detect_network_env
+    network_env=$?
     
     if [ $network_env -eq 2 ]; then
         echo "prefer-ipv4"
@@ -313,9 +309,6 @@ MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
 
 # 计算期望的配置值
-# ============================================================
-
-# 1. DNS_IP_PREFERENCE 和 IPV6 相关
 if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
     if [ -n "${DNS_IP_PREFERENCE}" ]; then
         EXPECTED_DNS_IP_PREFERENCE=$(strip_quotes "${DNS_IP_PREFERENCE}")
@@ -324,7 +317,6 @@ if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
     fi
     WRITE_IPV6=false
 else
-    # v6- 版本也支持国内外判断
     if [ -n "${DNS_IP_PREFERENCE}" ]; then
         EXPECTED_DNS_IP_PREFERENCE=$(strip_quotes "${DNS_IP_PREFERENCE}")
     else
@@ -338,17 +330,15 @@ else
     WRITE_IPV6=true
 fi
 
-# 2. PSK
 if [ -n "${PSK}" ]; then
     EXPECTED_PSK=$(strip_quotes "${PSK}")
 else
     EXPECTED_PSK=$(random_psk)
 fi
 
-# 3. LISTEN
 EXPECTED_LISTEN=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
 
-# 4. DNS（v4.1.0+ 才支持）
+# DNS 配置
 if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
     EXPECTED_DNS=""
 elif [ "$MAJOR_VERSION" -lt 4 ]; then
@@ -361,7 +351,7 @@ else
     fi
 fi
 
-# 5. EGRESS_INTERFACE（v5+ 支持）
+# EGRESS_INTERFACE
 if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
     if [ -n "${EGRESS_INTERFACE}" ]; then
         EXPECTED_EGRESS_INTERFACE=$(strip_quotes "${EGRESS_INTERFACE}")
@@ -372,7 +362,7 @@ else
     EXPECTED_EGRESS_INTERFACE=""
 fi
 
-# 6. OBFS 和 HOST（v6 以下支持）
+# OBFS 和 HOST
 if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
     if [ -n "${OBFS}" ]; then
         EXPECTED_OBFS=$(strip_quotes "${OBFS}")
@@ -389,10 +379,7 @@ else
     EXPECTED_HOST=""
 fi
 
-# ============================================================
 # 检查是否需要更新配置文件
-# ============================================================
-
 NEED_UPDATE=false
 CURRENT_HASH=$(current_env_hash)
 
@@ -416,10 +403,7 @@ else
     fi
 fi
 
-# ============================================================
 # 更新配置文件
-# ============================================================
-
 if [ "$NEED_UPDATE" = true ]; then
     if [ ! -f "$CONFIG_FILE" ]; then
         cat > "$CONFIG_FILE" <<EOF
@@ -462,10 +446,7 @@ EOF
     echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
 fi
 
-# ============================================================
 # 显示配置文件并启动服务
-# ============================================================
-
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cat "$CONFIG_FILE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
