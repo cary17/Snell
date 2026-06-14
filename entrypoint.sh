@@ -38,15 +38,22 @@ random_port() {
 # 网络检测函数
 # ============================================================
 
-# 使用 nc 测试连通性（兼容所有版本）
+# 使用 nc 测试连通性（兼容所有版本，支持 IPv6 括号）
 test_connectivity() {
     local target="$1"
     local port="${2:-80}"
     local timeout="${3:-2}"
     
     if command -v nc >/dev/null 2>&1; then
-        if nc -z -w $timeout "$target" "$port" 2>/dev/null; then
-            return 0
+        # 如果 target 看起来像 IPv6 地址（包含冒号），则加上方括号
+        if echo "$target" | grep -q ':'; then
+            if nc -z -w $timeout "[$target]" "$port" 2>/dev/null; then
+                return 0
+            fi
+        else
+            if nc -z -w $timeout "$target" "$port" 2>/dev/null; then
+                return 0
+            fi
         fi
     fi
     return 1
