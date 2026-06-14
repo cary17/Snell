@@ -25,7 +25,6 @@ random_psk() {
     if [ -r /dev/urandom ]; then
         tr -dc 'A-Za-z0-9+/' </dev/urandom | head -c ${LENGTH}
     else
-        # 回退方案
         echo "$(date +%s)$$$(hostname)" | sha256sum 2>/dev/null | cut -c1-${LENGTH}
     fi
 }
@@ -36,42 +35,18 @@ random_port() {
 }
 
 # ============================================================
-# 网络检测函数
+# 网络检测函数（使用 ping）
 # ============================================================
 
-# 使用 nc 测试连通性
-test_connectivity() {
-    local target="$1"
-    local port="${2:-80}"
-    local timeout="${3:-2}"
-    
-    # 如果 nc 不存在，返回失败
-    if ! command -v nc >/dev/null 2>&1; then
-        return 1
-    fi
-    
-    # IPv6 地址需要括号
-    if echo "$target" | grep -q ':'; then
-        if nc -z -w $timeout "[$target]" "$port" 2>/dev/null; then
-            return 0
-        fi
-    else
-        if nc -z -w $timeout "$target" "$port" 2>/dev/null; then
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# 测试 Google 连通性
+# 使用 ping 测试 Google 连通性（国际网络判断）
 test_google() {
-    test_connectivity "google.com" 80 2
+    ping -4 -c 1 -W 2 google.com >/dev/null 2>&1
 }
 
-# 测试国内域名
+# 使用 ping 测试国内域名
 test_domestic() {
     for domain in baidu.com aliyun.com; do
-        if test_connectivity "$domain" 80 2; then
+        if ping -4 -c 1 -W 2 "$domain" >/dev/null 2>&1; then
             return 0
         fi
     done
@@ -79,6 +54,7 @@ test_domestic() {
 }
 
 # 检测网络环境
+# 返回值：0=国内, 1=国外, 2=无网络
 detect_network_env() {
     local google_ok=false
     local domestic_ok=false
@@ -103,7 +79,7 @@ detect_network_env() {
 # 测试 IPv4 连通性
 test_ipv4_connectivity() {
     for ip in 8.8.8.8 1.1.1.1 119.29.29.29 223.5.5.5; do
-        if test_connectivity "$ip" 53 2; then
+        if ping -4 -c 1 -W 2 "$ip" >/dev/null 2>&1; then
             return 0
         fi
     done
@@ -113,18 +89,23 @@ test_ipv4_connectivity() {
 # 测试 IPv6 连通性
 test_ipv6_connectivity() {
     for ip in 2001:4860:4860::8888 2606:4700:4700::1111 2402:4e00:: 2400:3200::1; do
-        if test_connectivity "$ip" 53 2; then
+        if ping -6 -c 1 -W 2 "$ip" >/dev/null 2>&1; then
             return 0
         fi
     done
     return 1
 }
 
-# 获取 DNS 值
+# ============================================================
+# DNS 值生成函数
+# ============================================================
+
+# 获取 DNS 值（根据网络环境+连通性）
 get_dns_value() {
     detect_network_env
     local network_env=$?
     
+    # 无网络时，返回完整的国际 DNS
     if [ $network_env -eq 2 ]; then
         echo "8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
         return
@@ -139,10 +120,10 @@ get_dns_value() {
     local ipv4_dns=""
     local ipv6_dns=""
     
-    if [ $network_env -eq 0 ]; then
+    if [ $network_env -eq 0 ]; then  # 国内
         ipv4_dns="119.29.29.29, 223.5.5.5"
         ipv6_dns="2402:4e00::, 2400:3200::1"
-    else
+    else  # 国外
         ipv4_dns="8.8.8.8, 1.1.1.1"
         ipv6_dns="2001:4860:4860::8888, 2606:4700:4700::1111"
     fi
@@ -292,11 +273,10 @@ set_config() {
     fi
 }
 
-# 获取当前环境变量哈希（使用 md5sum 替代 sha256sum，兼容性更好）
+# 获取当前环境变量哈希
 current_env_hash() {
     echo "${LISTEN:-}${PSK:-}${IPV6:-}${DNS:-}${DNS_IP_PREFERENCE:-}${EGRESS_INTERFACE:-}${OBFS:-}${HOST:-}" | md5sum 2>/dev/null | cut -c1-32
     if [ $? -ne 0 ]; then
-        # 如果 md5sum 也不存在，返回固定值
         echo "00000000000000000000000000000000"
     fi
 }
@@ -311,6 +291,9 @@ MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "$FULL_VERSION" | cut -d. -f2)
 
 # 计算期望的配置值
+# ============================================================
+
+# 1. DNS_IP_PREFERENCE 和 IPV6 相关
 if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
     if [ -n "${DNS_IP_PREFERENCE}" ]; then
         EXPECTED_DNS_IP_PREFERENCE=$(strip_quotes "${DNS_IP_PREFERENCE}")
@@ -319,7 +302,12 @@ if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
     fi
     WRITE_IPV6=false
 else
-    EXPECTED_DNS_IP_PREFERENCE=""
+    # v6- 版本：也需要根据国内外决定 DNS_IP_PREFERENCE
+    if [ -n "${DNS_IP_PREFERENCE}" ]; then
+        EXPECTED_DNS_IP_PREFERENCE=$(strip_quotes "${DNS_IP_PREFERENCE}")
+    else
+        EXPECTED_DNS_IP_PREFERENCE=$(get_dns_ip_preference)
+    fi
     if [ -n "${IPV6}" ]; then
         IPV6_VAL=$(strip_quotes "${IPV6}")
     else
@@ -328,15 +316,17 @@ else
     WRITE_IPV6=true
 fi
 
+# 2. PSK
 if [ -n "${PSK}" ]; then
     EXPECTED_PSK=$(strip_quotes "${PSK}")
 else
     EXPECTED_PSK=$(random_psk)
 fi
 
+# 3. LISTEN
 EXPECTED_LISTEN=$(parse_listen "$MAJOR_VERSION" "$(strip_quotes "${LISTEN:-}")")
 
-# DNS 配置
+# 4. DNS（v4.1.0+ 才支持，v3/v4.0 不支持）
 if [ "$MAJOR_VERSION" -eq 4 ] && [ "$MINOR_VERSION" -lt 1 ]; then
     EXPECTED_DNS=""
 elif [ "$MAJOR_VERSION" -lt 4 ]; then
@@ -345,19 +335,12 @@ else
     if [ -n "${DNS}" ]; then
         EXPECTED_DNS=$(strip_quotes "${DNS}")
     else
-        if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-            EXPECTED_DNS=$(get_dns_value)
-        else
-            if [ "$IPV6_VAL" = "true" ]; then
-                EXPECTED_DNS="8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111"
-            else
-                EXPECTED_DNS="8.8.8.8, 1.1.1.1"
-            fi
-        fi
+        # 所有支持 DNS 的版本都根据网络环境判断
+        EXPECTED_DNS=$(get_dns_value)
     fi
 fi
 
-# EGRESS_INTERFACE
+# 5. EGRESS_INTERFACE（v5+ 支持）
 if [ "$MAJOR_VERSION" -ge 5 ] 2>/dev/null; then
     if [ -n "${EGRESS_INTERFACE}" ]; then
         EXPECTED_EGRESS_INTERFACE=$(strip_quotes "${EGRESS_INTERFACE}")
@@ -368,7 +351,7 @@ else
     EXPECTED_EGRESS_INTERFACE=""
 fi
 
-# OBFS 和 HOST
+# 6. OBFS 和 HOST（v6 以下支持）
 if [ "$MAJOR_VERSION" -lt 6 ] 2>/dev/null; then
     if [ -n "${OBFS}" ]; then
         EXPECTED_OBFS=$(strip_quotes "${OBFS}")
@@ -385,7 +368,10 @@ else
     EXPECTED_HOST=""
 fi
 
+# ============================================================
 # 检查是否需要更新配置文件
+# ============================================================
+
 NEED_UPDATE=false
 CURRENT_HASH=$(current_env_hash)
 
@@ -399,15 +385,6 @@ else
         NEED_UPDATE=true
     fi
     
-    if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-        if [ -n "$EXPECTED_DNS" ] && ! grep -q "^dns = " "$CONFIG_FILE" 2>/dev/null; then
-            NEED_UPDATE=true
-        fi
-        if [ -n "$EXPECTED_DNS_IP_PREFERENCE" ] && ! grep -q "^dns-ip-preference = " "$CONFIG_FILE" 2>/dev/null; then
-            NEED_UPDATE=true
-        fi
-    fi
-    
     if [ -f "$ENV_HASH_FILE" ]; then
         OLD_HASH=$(cat "$ENV_HASH_FILE" 2>/dev/null)
         if [ "$CURRENT_HASH" != "$OLD_HASH" ]; then
@@ -418,7 +395,10 @@ else
     fi
 fi
 
+# ============================================================
 # 更新配置文件
+# ============================================================
+
 if [ "$NEED_UPDATE" = true ]; then
     if [ ! -f "$CONFIG_FILE" ]; then
         cat > "$CONFIG_FILE" <<EOF
@@ -438,12 +418,7 @@ EOF
     fi
     
     set_config "dns" "$EXPECTED_DNS"
-    
-    if [ "$MAJOR_VERSION" -ge 6 ] 2>/dev/null; then
-        set_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
-    else
-        set_config "dns-ip-preference" ""
-    fi
+    set_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
     
     if [ -n "$EXPECTED_EGRESS_INTERFACE" ]; then
         set_config "egress-interface" "$EXPECTED_EGRESS_INTERFACE"
@@ -466,12 +441,14 @@ EOF
     echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
 fi
 
+# ============================================================
 # 显示配置文件并启动服务
+# ============================================================
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cat "$CONFIG_FILE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# 启动 snell-server
 ./snell-server -c "$CONFIG_FILE" &
 SNELL_PID=$!
 
