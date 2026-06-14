@@ -6,7 +6,7 @@ ARG TARGETARCH
 ARG SNELL_VERSION
 ARG GITHUB_REPOSITORY
 
-# 安装构建时需要的工具
+# 安装构建时需要的工具（禁用缓存）
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -57,21 +57,18 @@ RUN chmod +x snell-server entrypoint.sh && chmod 777 /snell
 
 # -----------------------------------------------------------------------------
 # 关键修复：安装运行时必需的依赖
-# 1. 更新包列表（重要！）
-# 2. 安装 ca-certificates 和 netcat-openbsd
-# 3. 清理 apt 缓存以减小镜像体积
-# 4. 验证关键命令是否存在
-RUN set -ex; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
+# 使用 --fix-missing 确保包可用，每条命令独立执行避免缓存问题
+RUN apt-get update --fix-missing
+RUN apt-get install -y --no-install-recommends \
         ca-certificates \
-        netcat-openbsd; \
-    apt-get clean; \
-    rm -rf /var/lib/apt/lists/*; \
-    # 验证 snell-server 的依赖是否满足
-    ldd snell-server | grep "not found" && { echo "ERROR: Missing dependencies for snell-server"; exit 1; } || true; \
-    # 验证 nc 命令是否存在（这一步会确保 nc 被正确安装）
-    command -v nc >/dev/null 2>&1 || { echo "ERROR: nc command not found after installation"; exit 1; }
+        netcat-openbsd
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 验证 snell-server 的依赖是否满足
+RUN ldd snell-server | grep "not found" && { echo "ERROR: Missing dependencies for snell-server"; exit 1; } || true
+
+# 验证 nc 命令是否存在（这一步会确保 nc 被正确安装）
+RUN command -v nc >/dev/null 2>&1 || { echo "ERROR: nc command not found after installation"; exit 1; }
 
 # 健康检查：检测 Snell 默认端口
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
