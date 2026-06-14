@@ -39,7 +39,6 @@ RUN set -ex && \
     \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server && \
-    # 保存版本信息到文件
     echo "${SNELL_VERSION}" > /tmp/snell-version && \
     echo "${MAJOR_VERSION}" > /tmp/snell-major-version
 
@@ -49,15 +48,16 @@ FROM debian:${BASE_TAG}
 COPY --from=builder /tmp/snell-version /snell-version
 COPY --from=builder /tmp/snell-major-version /snell-major-version
 
-# 安装基础依赖（ca-certificates 和 netcat-openbsd）
-RUN set -ex && \
-    echo "Building for Snell version: $(cat /snell-version), major: $(cat /snell-major-version)" && \
-    apt-get update && \
+# 安装运行时依赖（最小化集合）
+# ca-certificates: 用于 HTTPS 连接
+# netcat-openbsd: 网络连通性测试（支持 -4/-6 参数）
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         netcat-openbsd \
     && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* /var/tmp/*
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
@@ -67,7 +67,7 @@ COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && \
     chmod 777 /snell
 
-# 验证所有依赖已满足
-RUN ldd snell-server | grep "not found" && echo "Warning: Missing dependencies" || echo "All dependencies satisfied"
+# 验证 snell-server 依赖已满足
+RUN ldd snell-server | grep -q "not found" && echo "Warning: Missing dependencies" || true
 
 ENTRYPOINT ["/snell/entrypoint.sh"]
