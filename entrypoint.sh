@@ -6,9 +6,13 @@ trap 'kill -TERM $SNELL_PID 2>/dev/null; wait $SNELL_PID 2>/dev/null' TERM INT
 # 工具函数
 # ============================================================
 
+strip_quotes() {
+    echo "$1" | sed -e 's/^[[:space:]"'"'"']//' -e 's/[[:space:]"'"'"']$//'
+}
+
 # 生成随机 PSK（16-255 字节，包含大小写字母、数字和特殊字符）
 random_psk() {
-    # 先随机确定长度（16-255）
+    # 随机长度 16-255
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
         LENGTH=$((16 + (${RANDOM_BYTE:-0} % 240)))
@@ -16,7 +20,7 @@ random_psk() {
         LENGTH=32
     fi
     
-    # 使用所有可打印字符生成强密码
+    # 使用所有可打印字符
     CHARSET='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+[]{}|;:,.<>?'
     CHARSET_LEN=90
     
@@ -33,36 +37,18 @@ random_psk() {
     echo "$PSK"
 }
 
-# 验证 PSK 长度是否有效（16-255 字节）
-validate_psk() {
-    local psk="$1"
-    local len=$(echo -n "$psk" | wc -c)
-    if [ "$len" -lt 16 ] || [ "$len" -gt 255 ]; then
-        echo "Warning: PSK length is $len bytes. Must be between 16 and 255 bytes." >&2
-        return 1
-    fi
-    return 0
-}
-
 random_port() {
     echo $((10000 + $(od -An -N2 -i /dev/urandom 2>/dev/null || echo $$) % 55536))
 }
 
 # ============================================================
-# 日志级别处理
+# 日志级别验证
 # ============================================================
 
-# 验证日志级别是否有效
 validate_loglevel() {
-    local level="$1"
-    case "$level" in
-        debug|info|warning|error|fatal)
-            return 0
-            ;;
-        *)
-            echo "Warning: Invalid log level '$level'. Valid levels: debug, info, warning, error, fatal" >&2
-            return 1
-            ;;
+    case "$1" in
+        debug|info|warning|error|fatal) return 0 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -167,42 +153,53 @@ get_major_version() {
     cat /snell/snell-major-version 2>/dev/null || echo "0"
 }
 
-# ============================================================
-# 版本比较函数 - 检查是否支持 mode 配置
-# Snell v6.0.0b3 及之后的所有版本都支持 mode
-# ============================================================
-
+# 检查是否支持 mode 配置
+# mode 从 v6.0.0b3 开始支持（包括 v6.0.0b3, v6.0.0, v6.0.1, v6.1.0 等）
 supports_mode() {
     local version=$(get_snell_version)
     version=${version#v}
     
     local main=$(echo "$version" | cut -d. -f1)
     
-    # 主版本 > 6
+    # 主版本 > 6 肯定支持
     if [ "$main" -gt 6 ] 2>/dev/null; then
         return 0
     fi
     
-    # 主版本 = 6
-    if [ "$main" -eq 6 ] 2>/dev/null; then
-        # 排除 v6.0.0b2 及更早
-        if echo "$version" | grep -qE '^6\.0\.0b[0-2]$'; then
-            return 1
-        fi
-        # 其他所有 v6.x 都支持
+    # 主版本 < 6 不支持
+    if [ "$main" -lt 6 ] 2>/dev/null; then
+        return 1
+    fi
+    
+    # 主版本 = 6，需要判断次版本和 beta 版本
+    local minor=$(echo "$version" | cut -d. -f2)
+    local rest=$(echo "$version" | cut -d. -f3)
+    
+    # 次版本 > 0，如 v6.1.0, v6.2.0 等
+    if [ "$minor" -gt 0 ] 2>/dev/null; then
         return 0
+    fi
+    
+    # 次版本 = 0，检查是否是 v6.0.0b3 或更高
+    if [ "$minor" -eq 0 ] 2>/dev/null; then
+        # 提取 beta 版本号
+        local beta=$(echo "$rest" | grep -o 'b[0-9]\+' | sed 's/b//')
+        if [ -n "$beta" ]; then
+            # beta 版本需要 >= 3
+            [ "$beta" -ge 3 ] 2>/dev/null && return 0 || return 1
+        else
+            # 没有 beta 标识，说明是正式版 v6.0.0
+            return 0
+        fi
     fi
     
     return 1
 }
 
-# 检查是否是 v6 或更高版本（废弃了 ipv6 配置项）
+# 检查是否是 v6 或更高版本（v6 废弃了 ipv6 配置项）
 is_v6_or_higher() {
     local major=$(get_major_version)
-    if [ "$major" -ge 6 ] 2>/dev/null; then
-        return 0
-    fi
-    return 1
+    [ "$major" -ge 6 ] 2>/dev/null
 }
 
 # ============================================================
@@ -241,6 +238,7 @@ parse_listen() {
 # ============================================================
 
 CONFIG_FILE="/snell/snell.conf"
+ENV_HASH_FILE="/snell/.env_hash"
 
 set_config() {
     local key="$1" new_value="$2"
@@ -250,6 +248,9 @@ set_config() {
         return
     fi
     
+    local old_value=$(grep "^${key} = " "$CONFIG_FILE" 2>/dev/null | sed "s/^${key} = //")
+    [ "$old_value" = "$new_value" ] && return
+    
     if grep -q "^${key} = " "$CONFIG_FILE" 2>/dev/null; then
         sed -i "s/^${key} = .*/${key} = ${new_value}/" "$CONFIG_FILE"
     else
@@ -257,18 +258,37 @@ set_config() {
     fi
 }
 
-# 处理所有 SNELL_ 前缀的环境变量作为配置项
+# 处理 SNELL_ 前缀的环境变量（扩展配置）
 process_snell_env_vars() {
-    # 遍历所有以 SNELL_ 开头的环境变量
     for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
-        # 提取配置键名（去掉 SNELL_ 前缀，转换为小写）
         key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-        # 获取值
         eval "value=\$$var"
         if [ -n "$value" ]; then
             set_config "$key" "$value"
         fi
     done
+}
+
+current_env_hash() {
+    local hash_str=""
+    # v6+ 不再包含 IPV6 变量
+    if is_v6_or_higher; then
+        for var in LISTEN PSK DNS DNS_IP_PREFERENCE MODE EGRESS_INTERFACE OBFS HOST; do
+            eval "val=\${$var:-}"
+            hash_str="${hash_str}${val}"
+        done
+    else
+        for var in LISTEN PSK IPV6 DNS DNS_IP_PREFERENCE EGRESS_INTERFACE OBFS HOST; do
+            eval "val=\${$var:-}"
+            hash_str="${hash_str}${val}"
+        done
+    fi
+    # 添加 SNELL_ 前缀的变量
+    for var in $(env | grep '^SNELL_' | cut -d'=' -f1 | sort); do
+        eval "val=\$$var"
+        hash_str="${hash_str}${var}=${val}"
+    done
+    echo "$hash_str" | md5sum 2>/dev/null | cut -c1-32 || echo "00000000000000000000000000000000"
 }
 
 # ============================================================
@@ -279,28 +299,21 @@ SNELL_VERSION=$(get_snell_version)
 MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "${SNELL_VERSION#v}" | cut -d. -f2)
 
-echo "Snell version: $SNELL_VERSION (major: $MAJOR_VERSION)"
+echo "Snell version: $SNELL_VERSION"
 
 # 计算期望配置
-# v6+ 使用新的 DNS 配置方式，废弃 ipv6 配置项
 if is_v6_or_higher; then
+    # v6+ 废弃 ipv6 配置项，使用 dns-ip-preference 代替
     EXPECTED_DNS_IP_PREFERENCE=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
-    WRITE_IPV6=false  # v6+ 不再写入 ipv6 配置
+    WRITE_IPV6=false
 else
+    # v5 及以下保留 ipv6 配置项
     EXPECTED_DNS_IP_PREFERENCE=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
     IPV6_VAL=${IPV6:-false}
     WRITE_IPV6=true
 fi
 
-# PSK 处理（全版本通用）
-if [ -n "$PSK" ]; then
-    EXPECTED_PSK="$PSK"
-    validate_psk "$EXPECTED_PSK" || true
-else
-    EXPECTED_PSK=$(random_psk)
-    echo "Generated random PSK (length: $(echo -n "$EXPECTED_PSK" | wc -c) bytes)"
-fi
-
+EXPECTED_PSK=${PSK:-$(random_psk)}
 EXPECTED_LISTEN=$(parse_listen "$MAJOR_VERSION" "${LISTEN:-}")
 
 # DNS 配置（v4.1.0+ 才支持）
@@ -310,15 +323,6 @@ else
     EXPECTED_DNS=""
 fi
 
-# 日志级别配置（全版本通用，通过命令行参数传递）
-LOGLEVEL_VAL=""
-if [ -n "$LOGLEVEL" ]; then
-    if validate_loglevel "$LOGLEVEL"; then
-        LOGLEVEL_VAL="$LOGLEVEL"
-    fi
-    # 如果无效，不设置日志级别，使用默认值
-fi
-
 EGRESS_INTERFACE_VAL=${EGRESS_INTERFACE:-""}
 OBFS_VAL=${OBFS:-""}
 HOST_VAL=${HOST:-""}
@@ -326,48 +330,73 @@ HOST_VAL=${HOST:-""}
 # Mode 配置（v6.0.0b3+ 才支持）
 if supports_mode; then
     MODE_VAL=${MODE:-default}
-    # 验证 mode 值是否合法
     case "$MODE_VAL" in
-        default|unshaped|unsafe-raw)
-            ;;
+        default|unshaped|unsafe-raw) ;;
         *) 
-            echo "Warning: Invalid mode '$MODE_VAL'. Using 'default'" >&2
+            echo "Warning: Invalid mode '$MODE_VAL', using default" >&2
             MODE_VAL="default"
             ;;
     esac
 else
     MODE_VAL=""
     if [ -n "$MODE" ]; then
-        echo "Warning: MODE is set but your Snell version ($SNELL_VERSION) doesn't support it. Mode requires v6.0.0b3 or later." >&2
+        echo "Warning: MODE requires Snell v6.0.0b3 or later" >&2
     fi
 fi
 
-# 生成配置文件
-echo "Generating configuration..."
-cat > "$CONFIG_FILE" <<EOF
+# 检查是否需要更新
+NEED_UPDATE=false
+CURRENT_HASH=$(current_env_hash)
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    NEED_UPDATE=true
+else
+    if [ -f "$ENV_HASH_FILE" ]; then
+        OLD_HASH=$(cat "$ENV_HASH_FILE" 2>/dev/null)
+        [ "$CURRENT_HASH" != "$OLD_HASH" ] && NEED_UPDATE=true
+    else
+        NEED_UPDATE=true
+    fi
+fi
+
+if [ "$NEED_UPDATE" = true ]; then
+    echo "Configuration changed, updating..."
+    
+    # 创建或更新配置文件
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat > "$CONFIG_FILE" <<EOF
 [snell-server]
 listen = ${EXPECTED_LISTEN}
 psk = ${EXPECTED_PSK}
 EOF
-
-# 添加可选配置项
-if [ "$WRITE_IPV6" = true ]; then
-    set_config "ipv6" "$IPV6_VAL"
+    fi
+    
+    set_config "listen" "$EXPECTED_LISTEN"
+    set_config "psk" "$EXPECTED_PSK"
+    
+    # v6+ 不再写入废弃的 ipv6 配置项
+    if [ "$WRITE_IPV6" = true ]; then
+        set_config "ipv6" "$IPV6_VAL"
+    fi
+    
+    set_config "dns" "$EXPECTED_DNS"
+    set_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
+    set_config "egress-interface" "$EGRESS_INTERFACE_VAL"
+    set_config "obfs" "$OBFS_VAL"
+    set_config "host" "$HOST_VAL"
+    
+    # v6.0.0b3+ 写入 mode 配置
+    if [ -n "$MODE_VAL" ]; then
+        set_config "mode" "$MODE_VAL"
+    fi
+    
+    # 处理扩展配置项
+    process_snell_env_vars
+    
+    echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
+else
+    echo "Configuration unchanged."
 fi
-
-set_config "dns" "$EXPECTED_DNS"
-set_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
-set_config "egress-interface" "$EGRESS_INTERFACE_VAL"
-set_config "obfs" "$OBFS_VAL"
-set_config "host" "$HOST_VAL"
-
-# 只有支持 mode 的版本才写入
-if [ -n "$MODE_VAL" ]; then
-    set_config "mode" "$MODE_VAL"
-fi
-
-# 处理所有 SNELL_ 前缀的环境变量作为额外配置项
-process_snell_env_vars
 
 # 显示配置并启动
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -377,19 +406,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # 构建启动命令
 CMD="./snell-server -c $CONFIG_FILE"
-if [ -n "$LOGLEVEL_VAL" ]; then
-    CMD="$CMD -l $LOGLEVEL_VAL"
-    echo "Log level: $LOGLEVEL_VAL (command line parameter)"
-else
-    echo "Log level: default"
+if [ -n "$LOGLEVEL" ] && validate_loglevel "$LOGLEVEL"; then
+    CMD="$CMD -l $LOGLEVEL"
+    echo "Log level: $LOGLEVEL"
 fi
-echo "Starting Snell Server..."
-echo "Command: $CMD"
+echo "Starting: $CMD"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# 启动 Snell 服务
 $CMD &
 SNELL_PID=$!
-
-# 等待进程结束
 wait $SNELL_PID 2>/dev/null
