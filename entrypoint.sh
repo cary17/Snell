@@ -1,6 +1,6 @@
 #!/bin/sh
 
-trap 'kill -TERM $SNELL_PID 2>/dev/null; wait $SNELL_PID 2>/dev/null' TERM INT
+trap 'kill -TERM $SNELL_PID 2>/dev/null' TERM INT
 
 # ============================================================
 # 工具函数
@@ -241,7 +241,6 @@ parse_listen() {
 # ============================================================
 
 CONFIG_FILE="/snell/snell.conf"
-ENV_HASH_FILE="/snell/.env_hash"
 PSK_FILE="/snell/.psk"
 
 # 读取保存的 PSK
@@ -258,41 +257,16 @@ save_psk() {
     echo "$1" > "$PSK_FILE"
 }
 
-set_config() {
-    local key="$1" new_value="$2"
-    
-    if [ -z "$new_value" ]; then
+# 直接更新单个配置项
+update_config() {
+    local key="$1" value="$2"
+    if [ -z "$value" ]; then
         sed -i "/^${key} = /d" "$CONFIG_FILE" 2>/dev/null
-        return
-    fi
-    
-    if grep -q "^${key} = " "$CONFIG_FILE" 2>/dev/null; then
-        sed -i "s/^${key} = .*/${key} = ${new_value}/" "$CONFIG_FILE"
+    elif grep -q "^${key} = " "$CONFIG_FILE" 2>/dev/null; then
+        sed -i "s/^${key} = .*/${key} = ${value}/" "$CONFIG_FILE"
     else
-        sed -i "/^psk = /a ${key} = ${new_value}" "$CONFIG_FILE"
+        sed -i "/^psk = /a ${key} = ${value}" "$CONFIG_FILE"
     fi
-}
-
-# 计算环境哈希（用于检测配置变化）
-current_env_hash() {
-    local hash_str=""
-    if is_v6_or_higher; then
-        for var in LISTEN DNS DNS_IP_PREFERENCE MODE EGRESS_INTERFACE OBFS HOST; do
-            eval "val=\${$var:-}"
-            hash_str="${hash_str}${val}"
-        done
-    else
-        for var in LISTEN IPV6 DNS DNS_IP_PREFERENCE EGRESS_INTERFACE OBFS HOST; do
-            eval "val=\${$var:-}"
-            hash_str="${hash_str}${val}"
-        done
-    fi
-    # 添加 SNELL_ 前缀的变量
-    for var in $(env | grep '^SNELL_' | cut -d'=' -f1 | sort); do
-        eval "val=\$$var"
-        hash_str="${hash_str}${var}=${val}"
-    done
-    echo "$hash_str" | md5sum 2>/dev/null | cut -c1-32 || echo "00000000000000000000000000000000"
 }
 
 # ============================================================
@@ -303,47 +277,40 @@ SNELL_VERSION=$(get_snell_version)
 MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "${SNELL_VERSION#v}" | cut -d. -f2)
 
-# 计算期望配置
+# 计算配置值
 if is_v6_or_higher; then
-    EXPECTED_DNS_IP_PREFERENCE=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
+    DNS_IP_PREFERENCE_VAL=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
     WRITE_IPV6=false
 else
-    EXPECTED_DNS_IP_PREFERENCE=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
+    DNS_IP_PREFERENCE_VAL=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
     IPV6_VAL=${IPV6:-false}
     WRITE_IPV6=true
 fi
 
-# PSK 处理：优先使用环境变量，否则使用保存的 PSK，最后才生成新的
+# PSK 处理
 SAVED_PSK=$(get_saved_psk)
 if [ -n "$PSK" ]; then
-    # 用户显式设置了 PSK
     EXPECTED_PSK="$PSK"
     if [ "$SAVED_PSK" != "$EXPECTED_PSK" ]; then
         save_psk "$EXPECTED_PSK"
     fi
 elif [ -n "$SAVED_PSK" ]; then
-    # 使用之前保存的 PSK
     EXPECTED_PSK="$SAVED_PSK"
 else
-    # 首次运行，生成新的随机 PSK
     EXPECTED_PSK=$(random_psk)
     save_psk "$EXPECTED_PSK"
 fi
 
-EXPECTED_LISTEN=$(parse_listen "$MAJOR_VERSION" "${LISTEN:-}")
+LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "${LISTEN:-}")
 
-# DNS 配置（v4.1.0+ 才支持）
+# DNS 配置
 if [ "$MAJOR_VERSION" -ge 4 ] && { [ "$MAJOR_VERSION" -ne 4 ] || [ "$MINOR_VERSION" -ge 1 ]; }; then
-    EXPECTED_DNS=${DNS:-$(get_dns_value)}
+    DNS_VAL=${DNS:-$(get_dns_value)}
 else
-    EXPECTED_DNS=""
+    DNS_VAL=""
 fi
 
-EGRESS_INTERFACE_VAL=${EGRESS_INTERFACE:-""}
-OBFS_VAL=${OBFS:-""}
-HOST_VAL=${HOST:-""}
-
-# Mode 配置（v6.0.0b3+ 才支持）
+# Mode 配置
 if supports_mode; then
     MODE_VAL=${MODE:-default}
     case "$MODE_VAL" in
@@ -354,61 +321,80 @@ else
     MODE_VAL=""
 fi
 
-# 检查其他配置是否需要更新
-NEED_UPDATE=false
-CURRENT_HASH=$(current_env_hash)
-
+# 检查配置文件是否存在
 if [ ! -f "$CONFIG_FILE" ]; then
-    NEED_UPDATE=true
-else
-    if [ -f "$ENV_HASH_FILE" ]; then
-        OLD_HASH=$(cat "$ENV_HASH_FILE" 2>/dev/null)
-        [ "$CURRENT_HASH" != "$OLD_HASH" ] && NEED_UPDATE=true
-    else
-        NEED_UPDATE=true
-    fi
-fi
-
-# 更新配置文件（如果需要）
-if [ "$NEED_UPDATE" = true ]; then
-    # 创建或更新配置文件
-    if [ ! -f "$CONFIG_FILE" ]; then
-        cat > "$CONFIG_FILE" <<EOF
+    # 首次运行，创建配置文件
+    cat > "$CONFIG_FILE" <<EOF
 [snell-server]
-listen = ${EXPECTED_LISTEN}
+listen = ${LISTEN_VAL}
 psk = ${EXPECTED_PSK}
 EOF
+    [ -n "$DNS_VAL" ] && echo "dns = ${DNS_VAL}" >> "$CONFIG_FILE"
+    echo "dns-ip-preference = ${DNS_IP_PREFERENCE_VAL}" >> "$CONFIG_FILE"
+    [ "$WRITE_IPV6" = true ] && echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
+    [ -n "$EGRESS_INTERFACE" ] && echo "egress-interface = ${EGRESS_INTERFACE}" >> "$CONFIG_FILE"
+    [ -n "$OBFS" ] && echo "obfs = ${OBFS}" >> "$CONFIG_FILE"
+    [ -n "$HOST" ] && echo "host = ${HOST}" >> "$CONFIG_FILE"
+    [ -n "$MODE_VAL" ] && echo "mode = ${MODE_VAL}" >> "$CONFIG_FILE"
+else
+    # 配置文件已存在，只更新变化的部分
+    # 更新 listen（如果环境变量存在且不同）
+    if [ -n "$LISTEN" ]; then
+        update_config "listen" "$LISTEN_VAL"
     fi
     
-    set_config "listen" "$EXPECTED_LISTEN"
-    
-    # v6+ 不再写入废弃的 ipv6 配置项
-    if [ "$WRITE_IPV6" = true ]; then
-        set_config "ipv6" "$IPV6_VAL"
-    else
-        set_config "ipv6" ""
+    # 更新 dns（如果环境变量存在且不同）
+    if [ -n "$DNS" ] || [ -z "$(grep '^dns = ' "$CONFIG_FILE" 2>/dev/null)" ]; then
+        update_config "dns" "$DNS_VAL"
     fi
     
-    set_config "dns" "$EXPECTED_DNS"
-    set_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
-    set_config "egress-interface" "$EGRESS_INTERFACE_VAL"
-    set_config "obfs" "$OBFS_VAL"
-    set_config "host" "$HOST_VAL"
+    # 更新 dns-ip-preference（如果环境变量存在）
+    if [ -n "$DNS_IP_PREFERENCE" ]; then
+        update_config "dns-ip-preference" "$DNS_IP_PREFERENCE_VAL"
+    fi
     
+    # 更新 ipv6（仅 v5 及以下）
+    if [ "$WRITE_IPV6" = true ] && [ -n "$IPV6" ]; then
+        update_config "ipv6" "$IPV6_VAL"
+    fi
+    
+    # 更新 egress-interface（如果环境变量存在）
+    if [ -n "$EGRESS_INTERFACE" ]; then
+        update_config "egress-interface" "$EGRESS_INTERFACE"
+    elif grep -q '^egress-interface = ' "$CONFIG_FILE" 2>/dev/null; then
+        # 如果环境变量不存在但配置文件中有，删除它
+        update_config "egress-interface" ""
+    fi
+    
+    # 更新 obfs（如果环境变量存在）
+    if [ -n "$OBFS" ]; then
+        update_config "obfs" "$OBFS"
+    elif grep -q '^obfs = ' "$CONFIG_FILE" 2>/dev/null; then
+        update_config "obfs" ""
+    fi
+    
+    # 更新 host（如果环境变量存在）
+    if [ -n "$HOST" ]; then
+        update_config "host" "$HOST"
+    elif grep -q '^host = ' "$CONFIG_FILE" 2>/dev/null; then
+        update_config "host" ""
+    fi
+    
+    # 更新 mode（如果环境变量存在且版本支持）
     if [ -n "$MODE_VAL" ]; then
-        set_config "mode" "$MODE_VAL"
+        update_config "mode" "$MODE_VAL"
+    elif grep -q '^mode = ' "$CONFIG_FILE" 2>/dev/null; then
+        update_config "mode" ""
     fi
     
-    # 处理扩展配置项
+    # 处理 SNELL_ 前缀的扩展配置
     for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
         key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
         eval "value=\$$var"
         if [ -n "$value" ]; then
-            set_config "$key" "$value"
+            update_config "$key" "$value"
         fi
     done
-    
-    echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
 fi
 
 # 显示配置
@@ -422,5 +408,12 @@ if [ -n "$LOGLEVEL" ] && validate_loglevel "$LOGLEVEL" 2>/dev/null; then
     CMD="$CMD -l $LOGLEVEL"
 fi
 
-# 启动服务
-exec $CMD
+# 启动服务（不使用 exec，让 trap 能够工作）
+$CMD &
+SNELL_PID=$!
+
+# 等待进程结束（使用 wait 但确保能快速响应信号）
+while kill -0 $SNELL_PID 2>/dev/null; do
+    wait $SNELL_PID 2>/dev/null
+    sleep 0.1
+done
