@@ -127,6 +127,38 @@ get_major_version() {
 }
 
 # ============================================================
+# 版本比较函数 - 检查是否支持 mode 配置
+# 需要 Snell >= v6.0.0b3 或 v6.0.0 正式版及以上
+# ============================================================
+
+supports_mode() {
+    local version=$(get_snell_version)
+    # 移除 v 前缀
+    version=${version#v}
+    
+    # 提取主版本
+    local main=$(echo "$version" | cut -d. -f1)
+    
+    # 主版本 > 6 肯定支持
+    if [ "$main" -gt 6 ] 2>/dev/null; then
+        return 0
+    fi
+    
+    # 主版本 = 6 时需要进一步判断
+    if [ "$main" -eq 6 ] 2>/dev/null; then
+        # 排除 v6.0.0b2 及更早的 beta 版本
+        if echo "$version" | grep -q 'b[0-2]$'; then
+            return 1
+        fi
+        # 其他所有 v6.x.x 都支持（包括 v6.0.0 正式版和 v6.0.0b3+）
+        return 0
+    fi
+    
+    # 主版本 < 6 不支持
+    return 1
+}
+
+# ============================================================
 # LISTEN 解析
 # ============================================================
 
@@ -183,7 +215,7 @@ set_config() {
 }
 
 current_env_hash() {
-    echo "${LISTEN:-}${PSK:-}${IPV6:-}${DNS:-}${DNS_IP_PREFERENCE:-}" | \
+    echo "${LISTEN:-}${PSK:-}${IPV6:-}${DNS:-}${DNS_IP_PREFERENCE:-}${MODE:-}" | \
         md5sum 2>/dev/null | cut -c1-32 || echo "00000000000000000000000000000000"
 }
 
@@ -218,6 +250,18 @@ fi
 EGRESS_INTERFACE_VAL=${EGRESS_INTERFACE:-""}
 OBFS_VAL=${OBFS:-""}
 HOST_VAL=${HOST:-""}
+
+# Mode 配置（需要 Snell >= v6.0.0b3 或 v6.0.0 正式版及以上）
+if supports_mode; then
+    MODE_VAL=${MODE:-default}
+    # 验证 mode 值是否合法
+    case "$MODE_VAL" in
+        default|unshaped|unsafe-raw) ;;
+        *) MODE_VAL="default" ;;
+    esac
+else
+    MODE_VAL=""
+fi
 
 # 检查是否需要更新
 NEED_UPDATE=false
@@ -258,6 +302,11 @@ EOF
     set_config "egress-interface" "$EGRESS_INTERFACE_VAL"
     set_config "obfs" "$OBFS_VAL"
     set_config "host" "$HOST_VAL"
+    
+    # 只有支持 mode 的版本才写入
+    if [ -n "$MODE_VAL" ]; then
+        set_config "mode" "$MODE_VAL"
+    fi
     
     echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
 fi
