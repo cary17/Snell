@@ -8,7 +8,6 @@ trap 'kill -TERM $SNELL_PID 2>/dev/null' TERM INT
 
 # 生成随机 PSK（24-64 字节，首字符必须是字母，最后一位不能是特殊符号）
 random_psk() {
-    # 随机长度 24-64
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
         LENGTH=$((24 + (${RANDOM_BYTE:-0} % 41)))
@@ -16,24 +15,17 @@ random_psk() {
         LENGTH=32
     fi
     
-    # 确保长度至少为 24
-    if [ "$LENGTH" -lt 24 ]; then
-        LENGTH=24
-    fi
+    [ "$LENGTH" -lt 24 ] && LENGTH=24
     
-    # 字母字符集（用于首字符）
     ALPHABET='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
     ALPHABET_LEN=52
     
-    # 字母数字字符集（用于最后一位，不能是特殊符号）
     ALPHANUM='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
     ALPHANUM_LEN=62
     
-    # 常用密码字符集（字母 + 数字 + 常用符号，用于中间字符）
     CHARSET='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+'
     CHARSET_LEN=84
     
-    # 首字符必须是字母
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
         INDEX=$((RANDOM_BYTE % ALPHABET_LEN))
@@ -42,7 +34,6 @@ random_psk() {
     fi
     PSK="$(echo "$ALPHABET" | cut -c$((INDEX+1)))"
     
-    # 中间字符（位置 2 到 LENGTH-1）
     for i in $(seq 2 $((LENGTH - 1))); do
         if [ -r /dev/urandom ]; then
             RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
@@ -53,7 +44,6 @@ random_psk() {
         PSK="${PSK}$(echo "$CHARSET" | cut -c$((INDEX+1)))"
     done
     
-    # 最后一位必须是字母或数字（不能是特殊符号）
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
         INDEX=$((RANDOM_BYTE % ALPHANUM_LEN))
@@ -68,10 +58,6 @@ random_psk() {
 random_port() {
     echo $((10000 + $(od -An -N2 -i /dev/urandom 2>/dev/null || echo $$) % 55536))
 }
-
-# ============================================================
-# 日志级别验证
-# ============================================================
 
 validate_loglevel() {
     case "$1" in
@@ -115,10 +101,6 @@ test_ipv6() {
     done
     return 1
 }
-
-# ============================================================
-# DNS 配置
-# ============================================================
 
 get_dns_value() {
     local network_type=$(get_network_type)
@@ -181,25 +163,11 @@ get_major_version() {
     cat /snell/snell-major-version 2>/dev/null || echo "0"
 }
 
-# 检查是否支持 mode 配置（v6.0.0b3+）
 supports_mode() {
-    local version=$(get_snell_version)
-    version=${version#v}
-    
-    # v6.0.0b3+ 或 v6.0.0+ 正式版都支持
-    if echo "$version" | grep -qE '^6\.0\.0b[3-9]|^6\.0\.0$|^6\.0\.[1-9]|^6\.[1-9]'; then
-        return 0
-    fi
-    
-    # v6.x 其他版本
-    if echo "$version" | grep -qE '^6\.'; then
-        return 0
-    fi
-    
-    return 1
+    local major=$(get_major_version)
+    [ "$major" -ge 6 ] 2>/dev/null
 }
 
-# 检查是否是 v6 或更高版本（v6 废弃了 ipv6 配置项）
 is_v6_or_higher() {
     local major=$(get_major_version)
     [ "$major" -ge 6 ] 2>/dev/null
@@ -222,13 +190,11 @@ parse_listen() {
         return
     fi
     
-    # 已经是完整地址格式
     if echo "$input" | grep -q ':' && ! echo "$input" | grep -q '^[0-9]\+$'; then
         printf "%s" "$input"
         return
     fi
     
-    # 仅端口号
     if [ "$major" -ge 6 ] 2>/dev/null; then
         printf "0.0.0.0:${input}, [::]:${input}"
     else
@@ -241,23 +207,8 @@ parse_listen() {
 # ============================================================
 
 CONFIG_FILE="/snell/snell.conf"
-PSK_FILE="/snell/.psk"
 
-# 读取保存的 PSK
-get_saved_psk() {
-    if [ -f "$PSK_FILE" ]; then
-        cat "$PSK_FILE" 2>/dev/null
-    else
-        echo ""
-    fi
-}
-
-# 保存 PSK
-save_psk() {
-    echo "$1" > "$PSK_FILE"
-}
-
-# 直接更新单个配置项
+# 更新单个配置项
 update_config() {
     local key="$1" value="$2"
     if [ -z "$value" ]; then
@@ -277,114 +228,128 @@ SNELL_VERSION=$(get_snell_version)
 MAJOR_VERSION=$(get_major_version)
 MINOR_VERSION=$(echo "${SNELL_VERSION#v}" | cut -d. -f2)
 
-# 计算配置值
-if is_v6_or_higher; then
-    DNS_IP_PREFERENCE_VAL=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
-    WRITE_IPV6=false
-else
-    DNS_IP_PREFERENCE_VAL=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
-    IPV6_VAL=${IPV6:-false}
-    WRITE_IPV6=true
-fi
-
-# PSK 处理
-SAVED_PSK=$(get_saved_psk)
-if [ -n "$PSK" ]; then
-    EXPECTED_PSK="$PSK"
-    if [ "$SAVED_PSK" != "$EXPECTED_PSK" ]; then
-        save_psk "$EXPECTED_PSK"
-    fi
-elif [ -n "$SAVED_PSK" ]; then
-    EXPECTED_PSK="$SAVED_PSK"
-else
-    EXPECTED_PSK=$(random_psk)
-    save_psk "$EXPECTED_PSK"
-fi
-
-LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "${LISTEN:-}")
-
-# DNS 配置
-if [ "$MAJOR_VERSION" -ge 4 ] && { [ "$MAJOR_VERSION" -ne 4 ] || [ "$MINOR_VERSION" -ge 1 ]; }; then
-    DNS_VAL=${DNS:-$(get_dns_value)}
-else
-    DNS_VAL=""
-fi
-
-# Mode 配置
-if supports_mode; then
-    MODE_VAL=${MODE:-default}
-    case "$MODE_VAL" in
-        default|unshaped|unsafe-raw) ;;
-        *) MODE_VAL="default" ;;
-    esac
-else
-    MODE_VAL=""
-fi
-
 # 检查配置文件是否存在
 if [ ! -f "$CONFIG_FILE" ]; then
-    # 首次运行，创建配置文件
+    echo "No existing config, creating new configuration..."
+    
+    # 计算配置值
+    if is_v6_or_higher; then
+        DNS_IP_PREFERENCE_VAL=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
+    else
+        DNS_IP_PREFERENCE_VAL=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
+        IPV6_VAL=${IPV6:-false}
+    fi
+    
+    # PSK
+    if [ -n "$PSK" ]; then
+        PSK_VAL="$PSK"
+    else
+        PSK_VAL=$(random_psk)
+    fi
+    
+    LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "${LISTEN:-}")
+    
+    # DNS 配置
+    if [ "$MAJOR_VERSION" -ge 4 ] && { [ "$MAJOR_VERSION" -ne 4 ] || [ "$MINOR_VERSION" -ge 1 ]; }; then
+        DNS_VAL=${DNS:-$(get_dns_value)}
+    else
+        DNS_VAL=""
+    fi
+    
+    # Mode 配置
+    if supports_mode; then
+        MODE_VAL=${MODE:-default}
+        case "$MODE_VAL" in
+            default|unshaped|unsafe-raw) ;;
+            *) MODE_VAL="default" ;;
+        esac
+    else
+        MODE_VAL=""
+    fi
+    
+    # 创建配置文件
     cat > "$CONFIG_FILE" <<EOF
 [snell-server]
 listen = ${LISTEN_VAL}
-psk = ${EXPECTED_PSK}
+psk = ${PSK_VAL}
 EOF
+    
     [ -n "$DNS_VAL" ] && echo "dns = ${DNS_VAL}" >> "$CONFIG_FILE"
     echo "dns-ip-preference = ${DNS_IP_PREFERENCE_VAL}" >> "$CONFIG_FILE"
-    [ "$WRITE_IPV6" = true ] && echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
+    
+    if ! is_v6_or_higher; then
+        echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
+    fi
+    
     [ -n "$EGRESS_INTERFACE" ] && echo "egress-interface = ${EGRESS_INTERFACE}" >> "$CONFIG_FILE"
     [ -n "$OBFS" ] && echo "obfs = ${OBFS}" >> "$CONFIG_FILE"
     [ -n "$HOST" ] && echo "host = ${HOST}" >> "$CONFIG_FILE"
     [ -n "$MODE_VAL" ] && echo "mode = ${MODE_VAL}" >> "$CONFIG_FILE"
+    
+    # 处理 SNELL_ 前缀的扩展配置
+    for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
+        key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+        eval "value=\$$var"
+        [ -n "$value" ] && echo "${key} = ${value}" >> "$CONFIG_FILE"
+    done
+    
 else
-    # 配置文件已存在，只更新变化的部分
-    # 更新 listen（如果环境变量存在且不同）
+    echo "Existing config found, updating only environment variables..."
+    
+    # 配置文件已存在，只更新环境变量明确指定的配置项
+    
+    # 更新 listen
     if [ -n "$LISTEN" ]; then
+        LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "${LISTEN}")
         update_config "listen" "$LISTEN_VAL"
+        echo "Updated listen: $LISTEN_VAL"
     fi
     
-    # 更新 dns（如果环境变量存在且不同）
-    if [ -n "$DNS" ] || [ -z "$(grep '^dns = ' "$CONFIG_FILE" 2>/dev/null)" ]; then
-        update_config "dns" "$DNS_VAL"
+    # 更新 psk（如果环境变量指定）
+    if [ -n "$PSK" ]; then
+        update_config "psk" "$PSK"
+        echo "Updated psk"
     fi
     
-    # 更新 dns-ip-preference（如果环境变量存在）
+    # 更新 dns（如果环境变量指定）
+    if [ -n "$DNS" ]; then
+        update_config "dns" "$DNS"
+        echo "Updated dns: $DNS"
+    fi
+    
+    # 更新 dns-ip-preference（如果环境变量指定）
     if [ -n "$DNS_IP_PREFERENCE" ]; then
-        update_config "dns-ip-preference" "$DNS_IP_PREFERENCE_VAL"
+        update_config "dns-ip-preference" "$DNS_IP_PREFERENCE"
+        echo "Updated dns-ip-preference: $DNS_IP_PREFERENCE"
     fi
     
-    # 更新 ipv6（仅 v5 及以下）
-    if [ "$WRITE_IPV6" = true ] && [ -n "$IPV6" ]; then
-        update_config "ipv6" "$IPV6_VAL"
-    fi
-    
-    # 更新 egress-interface（如果环境变量存在）
+    # 更新 egress-interface（如果环境变量指定）
     if [ -n "$EGRESS_INTERFACE" ]; then
         update_config "egress-interface" "$EGRESS_INTERFACE"
-    elif grep -q '^egress-interface = ' "$CONFIG_FILE" 2>/dev/null; then
-        # 如果环境变量不存在但配置文件中有，删除它
-        update_config "egress-interface" ""
+        echo "Updated egress-interface: $EGRESS_INTERFACE"
     fi
     
-    # 更新 obfs（如果环境变量存在）
+    # 更新 obfs（如果环境变量指定）
     if [ -n "$OBFS" ]; then
         update_config "obfs" "$OBFS"
-    elif grep -q '^obfs = ' "$CONFIG_FILE" 2>/dev/null; then
-        update_config "obfs" ""
+        echo "Updated obfs: $OBFS"
     fi
     
-    # 更新 host（如果环境变量存在）
+    # 更新 host（如果环境变量指定）
     if [ -n "$HOST" ]; then
         update_config "host" "$HOST"
-    elif grep -q '^host = ' "$CONFIG_FILE" 2>/dev/null; then
-        update_config "host" ""
+        echo "Updated host: $HOST"
     fi
     
-    # 更新 mode（如果环境变量存在且版本支持）
-    if [ -n "$MODE_VAL" ]; then
+    # 更新 mode（如果环境变量指定且版本支持）
+    if [ -n "$MODE" ] && supports_mode; then
+        MODE_VAL="$MODE"
+        case "$MODE_VAL" in
+            default|unshaped|unsafe-raw) ;;
+            *) MODE_VAL="default" ;;
+        esac
         update_config "mode" "$MODE_VAL"
-    elif grep -q '^mode = ' "$CONFIG_FILE" 2>/dev/null; then
-        update_config "mode" ""
+        echo "Updated mode: $MODE_VAL"
     fi
     
     # 处理 SNELL_ 前缀的扩展配置
@@ -393,6 +358,7 @@ else
         eval "value=\$$var"
         if [ -n "$value" ]; then
             update_config "$key" "$value"
+            echo "Updated $key: $value"
         fi
     done
 fi
@@ -408,12 +374,7 @@ if [ -n "$LOGLEVEL" ] && validate_loglevel "$LOGLEVEL" 2>/dev/null; then
     CMD="$CMD -l $LOGLEVEL"
 fi
 
-# 启动服务（不使用 exec，让 trap 能够工作）
+# 启动服务
 $CMD &
 SNELL_PID=$!
-
-# 等待进程结束（使用 wait 但确保能快速响应信号）
-while kill -0 $SNELL_PID 2>/dev/null; do
-    wait $SNELL_PID 2>/dev/null
-    sleep 0.1
-done
+wait $SNELL_PID
