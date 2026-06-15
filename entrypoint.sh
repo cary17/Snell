@@ -214,9 +214,38 @@ set_config() {
     fi
 }
 
+# 处理所有 SNELL_ 前缀的环境变量作为配置项
+process_snell_env_vars() {
+    # 遍历所有以 SNELL_ 开头的环境变量
+    for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
+        # 提取配置键名（去掉 SNELL_ 前缀，转换为小写）
+        key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+        # 获取值
+        eval "value=\$$var"
+        if [ -n "$value" ]; then
+            set_config "$key" "$value"
+        fi
+    done
+}
+
+# 计算环境哈希（用于检测配置变化）
 current_env_hash() {
-    echo "${LISTEN:-}${PSK:-}${IPV6:-}${DNS:-}${DNS_IP_PREFERENCE:-}${MODE:-}" | \
-        md5sum 2>/dev/null | cut -c1-32 || echo "00000000000000000000000000000000"
+    # 获取所有相关环境变量的值
+    local env_values=""
+    
+    # 标准环境变量
+    for std_var in LISTEN PSK IPV6 DNS DNS_IP_PREFERENCE MODE EGRESS_INTERFACE OBFS HOST; do
+        eval "val=\${$std_var:-}"
+        env_values="${env_values}${val}"
+    done
+    
+    # SNELL_ 前缀的额外环境变量
+    for var in $(env | grep '^SNELL_' | cut -d'=' -f1 | sort); do
+        eval "val=\$$var"
+        env_values="${env_values}${var}=${val}"
+    done
+    
+    echo "$env_values" | md5sum 2>/dev/null | cut -c1-32 || echo "00000000000000000000000000000000"
 }
 
 # ============================================================
@@ -307,6 +336,10 @@ EOF
     if [ -n "$MODE_VAL" ]; then
         set_config "mode" "$MODE_VAL"
     fi
+    
+    # 处理所有 SNELL_ 前缀的环境变量作为额外配置项
+    # 这会在最后执行，可以覆盖上面的标准配置
+    process_snell_env_vars
     
     echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
 fi
