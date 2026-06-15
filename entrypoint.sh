@@ -171,44 +171,19 @@ get_major_version() {
     cat /snell/snell-major-version 2>/dev/null || echo "0"
 }
 
-# 检查是否支持 mode 配置
-# mode 从 v6.0.0b3 开始支持（包括 v6.0.0b3, v6.0.0, v6.0.1, v6.1.0 等）
+# 检查是否支持 mode 配置（v6.0.0b3+）
 supports_mode() {
     local version=$(get_snell_version)
     version=${version#v}
     
-    local main=$(echo "$version" | cut -d. -f1)
-    
-    # 主版本 > 6 肯定支持
-    if [ "$main" -gt 6 ] 2>/dev/null; then
+    # v6.0.0b3+ 或 v6.0.0+ 正式版都支持
+    if echo "$version" | grep -qE '^6\.0\.0b[3-9]|^6\.0\.0$|^6\.0\.[1-9]|^6\.[1-9]'; then
         return 0
     fi
     
-    # 主版本 < 6 不支持
-    if [ "$main" -lt 6 ] 2>/dev/null; then
-        return 1
-    fi
-    
-    # 主版本 = 6，需要判断次版本和 beta 版本
-    local minor=$(echo "$version" | cut -d. -f2)
-    local rest=$(echo "$version" | cut -d. -f3)
-    
-    # 次版本 > 0，如 v6.1.0, v6.2.0 等
-    if [ "$minor" -gt 0 ] 2>/dev/null; then
+    # v6.x 其他版本
+    if echo "$version" | grep -qE '^6\.'; then
         return 0
-    fi
-    
-    # 次版本 = 0，检查是否是 v6.0.0b3 或更高
-    if [ "$minor" -eq 0 ] 2>/dev/null; then
-        # 提取 beta 版本号
-        local beta=$(echo "$rest" | grep -o 'b[0-9]\+' | sed 's/b//')
-        if [ -n "$beta" ]; then
-            # beta 版本需要 >= 3
-            [ "$beta" -ge 3 ] 2>/dev/null && return 0 || return 1
-        else
-            # 没有 beta 标识，说明是正式版 v6.0.0
-            return 0
-        fi
     fi
     
     return 1
@@ -362,63 +337,60 @@ else
     fi
 fi
 
-# 检查是否需要更新
-NEED_UPDATE=false
-CURRENT_HASH=$(current_env_hash)
+# 强制更新配置（简单可靠）
+echo "Generating configuration..."
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    NEED_UPDATE=true
-else
-    if [ -f "$ENV_HASH_FILE" ]; then
-        OLD_HASH=$(cat "$ENV_HASH_FILE" 2>/dev/null)
-        [ "$CURRENT_HASH" != "$OLD_HASH" ] && NEED_UPDATE=true
-    else
-        NEED_UPDATE=true
-    fi
-fi
-
-if [ "$NEED_UPDATE" = true ]; then
-    echo "Configuration changed, updating..."
-    
-    # 创建或更新配置文件
-    if [ ! -f "$CONFIG_FILE" ]; then
-        cat > "$CONFIG_FILE" <<EOF
+# 直接重新生成配置文件
+cat > "$CONFIG_FILE" <<EOF
 [snell-server]
 listen = ${EXPECTED_LISTEN}
 psk = ${EXPECTED_PSK}
 EOF
-    fi
-    
-    set_config "listen" "$EXPECTED_LISTEN"
-    set_config "psk" "$EXPECTED_PSK"
-    
-    # v6+ 不再写入废弃的 ipv6 配置项
-    if [ "$WRITE_IPV6" = true ]; then
-        set_config "ipv6" "$IPV6_VAL"
-    fi
-    
-    set_config "dns" "$EXPECTED_DNS"
-    set_config "dns-ip-preference" "$EXPECTED_DNS_IP_PREFERENCE"
-    set_config "egress-interface" "$EGRESS_INTERFACE_VAL"
-    set_config "obfs" "$OBFS_VAL"
-    set_config "host" "$HOST_VAL"
-    
-    # v6.0.0b3+ 写入 mode 配置
-    if [ -n "$MODE_VAL" ]; then
-        set_config "mode" "$MODE_VAL"
-    fi
-    
-    # 处理扩展配置项
-    process_snell_env_vars
-    
-    echo "$CURRENT_HASH" > "$ENV_HASH_FILE"
-else
-    echo "Configuration unchanged."
+
+# 添加 DNS 配置（如果有）
+if [ -n "$EXPECTED_DNS" ]; then
+    echo "dns = ${EXPECTED_DNS}" >> "$CONFIG_FILE"
 fi
+
+# 添加 dns-ip-preference
+echo "dns-ip-preference = ${EXPECTED_DNS_IP_PREFERENCE}" >> "$CONFIG_FILE"
+
+# v5 及以下添加 ipv6 配置
+if [ "$WRITE_IPV6" = true ]; then
+    echo "ipv6 = ${IPV6_VAL}" >> "$CONFIG_FILE"
+fi
+
+# 添加 egress-interface（如果有）
+if [ -n "$EGRESS_INTERFACE_VAL" ]; then
+    echo "egress-interface = ${EGRESS_INTERFACE_VAL}" >> "$CONFIG_FILE"
+fi
+
+# 添加 obfs（如果有）
+if [ -n "$OBFS_VAL" ]; then
+    echo "obfs = ${OBFS_VAL}" >> "$CONFIG_FILE"
+fi
+
+# 添加 host（如果有）
+if [ -n "$HOST_VAL" ]; then
+    echo "host = ${HOST_VAL}" >> "$CONFIG_FILE"
+fi
+
+# 添加 mode（v6.0.0b3+）
+if [ -n "$MODE_VAL" ]; then
+    echo "mode = ${MODE_VAL}" >> "$CONFIG_FILE"
+fi
+
+# 处理 SNELL_ 前缀的扩展配置
+for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
+    key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+    eval "value=\$$var"
+    if [ -n "$value" ]; then
+        echo "${key} = ${value}" >> "$CONFIG_FILE"
+    fi
+done
 
 # 显示配置并启动
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Snell Server Configuration:"
 cat "$CONFIG_FILE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
