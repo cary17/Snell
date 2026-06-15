@@ -10,14 +10,19 @@ strip_quotes() {
     echo "$1" | sed -e 's/^[[:space:]"'"'"']//' -e 's/[[:space:]"'"'"']$//'
 }
 
-# 生成随机 PSK（16-64 字节，首字符必须是字母）
+# 生成随机 PSK（24-64 字节，首字符必须是字母）
 random_psk() {
-    # 随机长度 16-64
+    # 随机长度 24-64
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
-        LENGTH=$((16 + (${RANDOM_BYTE:-0} % 49)))
+        LENGTH=$((24 + (${RANDOM_BYTE:-0} % 41)))
     else
         LENGTH=32
+    fi
+    
+    # 确保长度至少为 24
+    if [ "$LENGTH" -lt 24 ]; then
+        LENGTH=24
     fi
     
     # 字母字符集（用于首字符）
