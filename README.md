@@ -1,7 +1,7 @@
 
 # Snell Server Docker Image
 
-支持 Snell v3 到 v6+ 的 Docker 镜像，自动适配不同版本的配置格式。
+支持 Snell 的 Docker 镜像，自动适配不同版本的配置格式。
 
 ## 支持平台
 
