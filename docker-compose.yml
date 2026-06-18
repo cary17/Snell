@@ -9,7 +9,7 @@ services:
       - TZ=Asia/Shanghai
       # 监听配置（推荐使用 LISTEN，v6+ 版本推荐）
       # 同时监听 IPv4 和 IPv6
-      #- PORT=20001
+      #- LISTE=20001
       #LISTEN可只写端口同时监听双栈
       - LISTEN=0.0.0.0:20001,[::]:20001
       # 认证密钥（必填）
