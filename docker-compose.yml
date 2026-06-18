@@ -7,7 +7,6 @@ services:
     network_mode: "host"
     environment:
       - TZ=Asia/Shanghai
-      # 监听配置（推荐使用 LISTEN，v6+ 版本推荐）
       # 同时监听 IPv4 和 IPv6
       #- LISTE=20001
       #LISTEN可只写端口同时监听双栈
