@@ -62,7 +62,8 @@ random_psk() {
 }
 
 random_port() {
-    echo $((10000 + $(od -An -N2 -i /dev/urandom 2>/dev/null || echo $$) % 55536))
+    RANDOM_WORD=$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ')
+    echo $((10000 + (${RANDOM_WORD:-$$} % 55536)))
 }
 
 validate_loglevel() {
@@ -196,6 +197,7 @@ supports_dns() {
 
 parse_listen() {
     local major="$1" input="$2"
+    local port result item first_port
     
     if [ -z "$input" ]; then
         PORT=$(random_port)
@@ -207,16 +209,33 @@ parse_listen() {
         return
     fi
     
-    if echo "$input" | grep -q ':' && ! echo "$input" | grep -q '^[0-9]\+$'; then
+    if echo "$input" | grep -q ':'; then
         printf "%s" "$input"
         return
     fi
     
     if [ "$major" -ge 6 ] 2>/dev/null; then
-        printf "0.0.0.0:${input}, [::]:${input}"
+        result=""
+        OLD_IFS="$IFS"
+        IFS=','
+        for item in $input; do
+            IFS="$OLD_IFS"
+            port=$(printf "%s" "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            if [ -n "$port" ]; then
+                result="${result:+${result}, }0.0.0.0:${port}, [::]:${port}"
+            fi
+            IFS=','
+        done
+        IFS="$OLD_IFS"
+        printf "%s" "$result"
     else
-        printf ":::${input}"
+        first_port=$(printf "%s" "$input" | cut -d, -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        printf ":::%s" "$first_port"
     fi
+}
+
+show_config() {
+    cat "$CONFIG_FILE"
 }
 
 # ============================================================
@@ -294,14 +313,14 @@ if [ ! -f "$CONFIG_FILE" ]; then
         # 处理 SNELL_ 前缀的扩展配置
         for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
             key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-            eval "value=\$$var"
+            value=$(printenv "$var" 2>/dev/null || true)
             [ -n "$value" ] && echo "${key} = ${value}"
         done
     } > "$CONFIG_FILE"
     
     # 显示配置
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    cat "$CONFIG_FILE"
+    show_config
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 else
@@ -312,7 +331,7 @@ else
     
     # 显示配置
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    cat "$CONFIG_FILE"
+    show_config
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
 

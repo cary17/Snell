@@ -22,6 +22,7 @@ VERSION="v${INPUT_VERSION#v}"
 
 PLATFORMS=("amd64" "i386" "aarch64" "armv7l")
 BASE_URL="https://dl.nssurge.com/snell"
+BACKUP_BASE_URL="https://raw.githubusercontent.com/cary17/Snell/main/Version"
 DIR="Version/${VERSION}"
 
 # 创建目录
@@ -38,26 +39,42 @@ FAIL_COUNT=0
 # 下载所有平台
 for platform in "${PLATFORMS[@]}"; do
     FILE="snell-server-${VERSION}-linux-${platform}.zip"
-    URL="${BASE_URL}/${FILE}"
+    OFFICIAL_URL="${BASE_URL}/${FILE}"
+    BACKUP_URL="${BACKUP_BASE_URL}/${VERSION}/${FILE}"
     OUTPUT="${DIR}/${FILE}"
     
     printf "%-10s " "[${platform}]"
     
     if [ -f "${OUTPUT}" ]; then
         echo "⚠️  已存在，跳过"
-        ((SUCCESS_COUNT++))
+        ((SUCCESS_COUNT+=1))
         continue
     fi
     
-    if wget -q --show-progress -O "${OUTPUT}" "${URL}" 2>&1; then
+    # 优先从官方下载
+    echo ""
+    echo "  📡 尝试官方源: ${OFFICIAL_URL}"
+    if wget -q --show-progress --timeout=30 --tries=3 -O "${OUTPUT}" "${OFFICIAL_URL}" 2>&1; then
         SIZE=$(du -h "${OUTPUT}" | cut -f1)
-        echo "✅ 完成 (${SIZE})"
-        ((SUCCESS_COUNT++))
-    else
-        echo "❌ 失败"
-        rm -f "${OUTPUT}"
-        ((FAIL_COUNT++))
+        echo "  ✅ 官方源下载成功 (${SIZE})"
+        ((SUCCESS_COUNT+=1))
+        continue
     fi
+    
+    # 官方失败，从备份源下载
+    echo "  ⚠️  官方源下载失败，尝试备份源..."
+    echo "  📡 备份源: ${BACKUP_URL}"
+    if wget -q --show-progress --timeout=30 --tries=3 -O "${OUTPUT}" "${BACKUP_URL}" 2>&1; then
+        SIZE=$(du -h "${OUTPUT}" | cut -f1)
+        echo "  ✅ 备份源下载成功 (${SIZE})"
+        ((SUCCESS_COUNT+=1))
+        continue
+    fi
+    
+    # 全部失败
+    echo "  ❌ 所有源均下载失败"
+    rm -f "${OUTPUT}"
+    ((FAIL_COUNT+=1))
 done
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

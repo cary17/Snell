@@ -8,6 +8,8 @@ ARG GITHUB_REPOSITORY
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
 
 RUN set -ex && \
+    [ -n "${SNELL_VERSION}" ] || { echo "SNELL_VERSION build arg is required" >&2; exit 1; } && \
+    TARGETARCH="${TARGETARCH:-$(dpkg --print-architecture)}" && \
     case "${TARGETARCH}" in \
         amd64) ARCH="amd64" ;; \
         386)   ARCH="i386" ;; \
@@ -18,16 +20,16 @@ RUN set -ex && \
     V_NUM="${SNELL_VERSION#v}" && \
     MAJOR_VERSION=$(echo "$V_NUM" | cut -d. -f1) && \
     FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip" && \
+    LOCAL_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/Version/v${V_NUM}/${FILE}" && \
+    OFFICIAL_URL="https://dl.nssurge.com/snell/${FILE}" && \
     \
-    if [ "$MAJOR_VERSION" = "3" ]; then \
-        echo "Downloading Snell v3 from local repository..."; \
-        LOCAL_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/Version/v${V_NUM}/${FILE}"; \
-        curl -fsSL --retry 3 --retry-delay 5 -o /tmp/s.zip "${LOCAL_URL}"; \
-    else \
-        echo "Downloading Snell v${MAJOR_VERSION} from official website..."; \
-        OFFICIAL_URL="https://dl.nssurge.com/snell/${FILE}"; \
-        curl -fsSL --retry 3 --retry-delay 5 -o /tmp/s.zip "${OFFICIAL_URL}"; \
-    fi && \
+    echo "Downloading Snell v${MAJOR_VERSION} from official website..."; \
+    curl -4 -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${OFFICIAL_URL}" || \
+    curl -6 -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${OFFICIAL_URL}" || { \
+        [ -n "${GITHUB_REPOSITORY}" ] || { echo "Official downloads failed and GITHUB_REPOSITORY is not set" >&2; exit 1; }; \
+        echo "Official downloads failed, trying Version/ backup..."; \
+        curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${LOCAL_URL}"; \
+    } && \
     \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server && \
@@ -52,6 +54,6 @@ COPY --from=builder /tmp/snell-server .
 COPY --from=builder /tmp/snell-version .
 COPY --from=builder /tmp/snell-major-version .
 COPY entrypoint.sh .
-RUN chmod +x snell-server entrypoint.sh && chmod 777 /snell
+RUN chmod +x snell-server entrypoint.sh && chmod 755 /snell
 
 ENTRYPOINT ["/snell/entrypoint.sh"]
