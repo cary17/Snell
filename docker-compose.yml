@@ -4,7 +4,7 @@ services:
     # image: ghcr.io/cary17/snell:latest
     container_name: snell
     restart: always
-    network_mode: "host"
+    network_mode: host
     environment:
       - TZ=Asia/Shanghai
       # 同时监听 IPv4 和 IPv6
