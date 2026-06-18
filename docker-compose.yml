@@ -19,7 +19,7 @@ services:
       - DNS_IP_PREFERENCE=prefer-ipv4
       #可选default, prefer-ipv4, prefer-ipv6, ipv4-only, ipv6-only
       # IPv6 支持
-      - IPV6=true
+      #- IPV6=true
       # 出口网卡
       - EGRESS_INTERFACE=eth0
       # 可选：Obfs 混淆
