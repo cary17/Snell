@@ -12,7 +12,7 @@ trap cleanup TERM INT
 # 工具函数
 # ============================================================
 
-# 生成随机 PSK（24-64 位，包含大小写字母、数字和安全特殊符号 ._-）
+# 生成随机 PSK（24-64 位，包含大小写字母、数字和安全特殊符号 ._-=）
 random_psk() {
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
@@ -26,7 +26,7 @@ random_psk() {
     UPPER='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     LOWER='abcdefghijklmnopqrstuvwxyz'
     DIGIT='0123456789'
-    SAFE_SPECIALS='._-'
+    SAFE_SPECIALS='._-='
     CHARSET="${UPPER}${LOWER}${DIGIT}${SAFE_SPECIALS}"
     
     random_char_from() {
