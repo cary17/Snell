@@ -18,7 +18,7 @@ RUN set -ex && \
         *) exit 1 ;; \
     esac && \
     V_NUM="${SNELL_VERSION#v}" && \
-    MAJOR_VERSION=$(echo "$V_NUM" | cut -d. -f1) && \
+    MAJOR_VERSION="${V_NUM%%.*}" && \
     FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip" && \
     LOCAL_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/Version/v${V_NUM}/${FILE}" && \
     OFFICIAL_URL="https://dl.nssurge.com/snell/${FILE}" && \
