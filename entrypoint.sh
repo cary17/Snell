@@ -12,45 +12,70 @@ trap cleanup TERM INT
 # 工具函数
 # ============================================================
 
-# 生成随机 PSK（24-64 位，包含大小写字母、数字和安全特殊符号 ._-=）
-random_psk() {
+random_byte() {
     if [ -r /dev/urandom ]; then
-        RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
-        LENGTH=$((24 + (${RANDOM_BYTE:-0} % 41)))
+        byte=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
     else
-        LENGTH=32
+        byte=$$
     fi
-    
-    [ "$LENGTH" -lt 24 ] && LENGTH=24
-    
+    printf '%s\n' "${byte:-0}"
+}
+
+random_char_from() {
+    char_source=$1
+    char_source_len=${#char_source}
+    index=$(random_index "$char_source_len")
+    printf '%s\n' "$char_source" | cut -c$((index + 1))
+}
+
+random_index() {
+    index_length=$1
+    index_limit=$((256 - (256 % index_length)))
+
+    while :; do
+        byte=$(random_byte)
+        if [ "$byte" -lt "$index_limit" ] 2>/dev/null; then
+            printf '%s\n' $((byte % index_length))
+            return
+        fi
+    done
+}
+
+psk_has_required_chars() {
+    psk_candidate=$1
+
+    case "$psk_candidate" in *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) ;; *) return 1 ;; esac
+    case "$psk_candidate" in *[abcdefghijklmnopqrstuvwxyz]*) ;; *) return 1 ;; esac
+    case "$psk_candidate" in *[0123456789]*) ;; *) return 1 ;; esac
+    case "$psk_candidate" in *[._=/-]*) ;; *) return 1 ;; esac
+    return 0
+}
+
+# 生成随机 PSK（24-64 位，包含大小写字母、数字和安全特殊符号 ._-=/）
+random_psk() {
     UPPER='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     LOWER='abcdefghijklmnopqrstuvwxyz'
     DIGIT='0123456789'
-    SAFE_SPECIALS='._-='
+    SAFE_SPECIALS='._-=/'
+    LETTERS="${UPPER}${LOWER}"
+    ALPHANUM="${LETTERS}${DIGIT}"
     CHARSET="${UPPER}${LOWER}${DIGIT}${SAFE_SPECIALS}"
-    
-    random_char_from() {
-        CHAR_SOURCE=$1
-        CHAR_SOURCE_LEN=${#CHAR_SOURCE}
-        if [ -r /dev/urandom ]; then
-            RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
-            INDEX=$((RANDOM_BYTE % CHAR_SOURCE_LEN))
-        else
-            INDEX=$(($$ % CHAR_SOURCE_LEN))
-        fi
-        printf '%s\n' "$CHAR_SOURCE" | cut -c$((INDEX+1))
-    }
-    
-    PSK="$(random_char_from "$UPPER")"
-    PSK="${PSK}$(random_char_from "$LOWER")"
-    PSK="${PSK}$(random_char_from "$DIGIT")"
-    PSK="${PSK}$(random_char_from "$SAFE_SPECIALS")"
-    
-    for i in $(seq 5 "$LENGTH"); do
-        PSK="${PSK}$(random_char_from "$CHARSET")"
+
+    while :; do
+        length=$((24 + $(random_index 41)))
+        psk="$(random_char_from "$LETTERS")"
+
+        position=2
+        while [ "$position" -lt "$length" ]; do
+            psk="${psk}$(random_char_from "$CHARSET")"
+            position=$((position + 1))
+        done
+
+        psk="${psk}$(random_char_from "$ALPHANUM")"
+        psk_has_required_chars "$psk" && break
     done
-    
-    echo "$PSK"
+
+    printf '%s\n' "$psk"
 }
 
 random_port() {
@@ -102,9 +127,9 @@ test_ipv6() {
 }
 
 get_dns_value() {
-    local network_type=$(get_network_type)
-    local ipv4_ok=false; test_ipv4 && ipv4_ok=true
-    local ipv6_ok=false; test_ipv6 && ipv6_ok=true
+    network_type=$(get_network_type)
+    ipv4_ok=false; test_ipv4 && ipv4_ok=true
+    ipv6_ok=false; test_ipv6 && ipv6_ok=true
     
     case "$network_type" in
         none)
@@ -132,9 +157,9 @@ get_dns_value() {
 }
 
 get_dns_ip_preference() {
-    local network_type=$(get_network_type)
-    local ipv4_ok=false; test_ipv4 && ipv4_ok=true
-    local ipv6_ok=false; test_ipv6 && ipv6_ok=true
+    network_type=$(get_network_type)
+    ipv4_ok=false; test_ipv4 && ipv4_ok=true
+    ipv6_ok=false; test_ipv6 && ipv6_ok=true
     
     case "$network_type" in
         none) echo "prefer-ipv4" ;;
@@ -163,19 +188,21 @@ get_major_version() {
 }
 
 supports_mode() {
-    local major=$(get_major_version)
+    major=$(get_major_version)
     [ "$major" -ge 6 ] 2>/dev/null
 }
 
 is_v6_or_higher() {
-    local major=$(get_major_version)
+    major=$(get_major_version)
     [ "$major" -ge 6 ] 2>/dev/null
 }
 
 supports_dns() {
-    local major=$(get_major_version)
-    local full_version=$(get_snell_version)
-    local minor=$(echo "${full_version#v}" | cut -d. -f2)
+    major=$(get_major_version)
+    full_version=$(get_snell_version)
+    version_without_v=${full_version#v}
+    minor=${version_without_v#*.}
+    minor=${minor%%.*}
     
     # v4.1+ 支持 DNS 配置
     [ "$major" -gt 4 ] 2>/dev/null && return 0
@@ -188,15 +215,15 @@ supports_dns() {
 # ============================================================
 
 parse_listen() {
-    local major="$1" input="$2"
-    local port result item first_port
+    major="$1"
+    input="$2"
     
     if [ -z "$input" ]; then
         PORT=$(random_port)
         if [ "$major" -ge 6 ] 2>/dev/null; then
-            printf "0.0.0.0:$PORT, [::]:$PORT"
+            printf '0.0.0.0:%s, [::]:%s' "$PORT" "$PORT"
         else
-            printf ":::$PORT"
+            printf ':::%s' "$PORT"
         fi
         return
     fi
@@ -234,9 +261,7 @@ show_config() {
 # 主逻辑
 # ============================================================
 
-SNELL_VERSION=$(get_snell_version)
 MAJOR_VERSION=$(get_major_version)
-MINOR_VERSION=$(echo "${SNELL_VERSION#v}" | cut -d. -f2)
 CONFIG_FILE="/snell/snell.conf"
 
 # 检查配置文件是否存在

@@ -304,31 +304,66 @@ generate_psk() {
     local upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     local lower='abcdefghijklmnopqrstuvwxyz'
     local digit='0123456789'
-    local safe_specials='._-'
+    local safe_specials='._-=/'
+    local letters="${upper}${lower}"
+    local alphanum="${letters}${digit}"
     local charset="${upper}${lower}${digit}${safe_specials}"
 
-    random_char_from() {
-        local source="$1"
-        local source_len=${#source}
+    random_byte() {
         local random_byte
         if command -v openssl &>/dev/null; then
             random_byte=$((16#$(openssl rand -hex 1 2>/dev/null || echo 00)))
         else
             random_byte=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
         fi
-        local index=$(( ${random_byte:-0} % source_len ))
+        printf '%s\n' "${random_byte:-0}"
+    }
+
+    random_char_from() {
+        local source="$1"
+        local source_len=${#source}
+        local index
+        index=$(random_index "$source_len")
         printf '%s' "${source:index:1}"
     }
 
-    local psk
-    psk="$(random_char_from "$upper")"
-    psk="${psk}$(random_char_from "$lower")"
-    psk="${psk}$(random_char_from "$digit")"
-    psk="${psk}$(random_char_from "$safe_specials")"
+    random_index() {
+        local index_length="$1"
+        local index_limit=$((256 - (256 % index_length)))
+        local random_byte
 
-    local i
-    for i in $(seq 5 24); do
-        psk="${psk}$(random_char_from "$charset")"
+        while true; do
+            random_byte=$(random_byte)
+            if [ "$random_byte" -lt "$index_limit" ] 2>/dev/null; then
+                printf '%s\n' $((random_byte % index_length))
+                return
+            fi
+        done
+    }
+
+    psk_has_required_chars() {
+        local psk_candidate="$1"
+
+        [[ "$psk_candidate" == *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]* ]] || return 1
+        [[ "$psk_candidate" == *[abcdefghijklmnopqrstuvwxyz]* ]] || return 1
+        [[ "$psk_candidate" == *[0123456789]* ]] || return 1
+        [[ "$psk_candidate" == *[._=/-]* ]] || return 1
+        return 0
+    }
+
+    local psk length position
+    while true; do
+        length=$((24 + $(random_index 41)))
+        psk="$(random_char_from "$letters")"
+
+        position=2
+        while [ "$position" -lt "$length" ]; do
+            psk="${psk}$(random_char_from "$charset")"
+            position=$((position + 1))
+        done
+
+        psk="${psk}$(random_char_from "$alphanum")"
+        psk_has_required_chars "$psk" && break
     done
 
     printf '%s\n' "$psk"
@@ -665,7 +700,7 @@ collect_config() {
 
     echo ""
     print_title "密码配置"
-    echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码（包含大小写字母、数字和 ._-）${NC}"
+    echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24-64 位强密码（包含大小写字母、数字和 ._-=/）${NC}"
     manual_psk=$(read_yes_no "是否手动设置密码" "n")
     if [[ "$manual_psk" =~ ^[Yy]$ ]]; then
         psk=$(read_with_default "请输入密码" "")
