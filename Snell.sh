@@ -301,11 +301,37 @@ generate_random_port() {
 }
 
 generate_psk() {
-    if command -v openssl &>/dev/null; then
-        openssl rand -base64 16 | tr -d '\n\r' | tr '+/' '-_' | cut -c1-24
-    else
-        tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24
-    fi
+    local upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    local lower='abcdefghijklmnopqrstuvwxyz'
+    local digit='0123456789'
+    local safe_specials='._-'
+    local charset="${upper}${lower}${digit}${safe_specials}"
+
+    random_char_from() {
+        local source="$1"
+        local source_len=${#source}
+        local random_byte
+        if command -v openssl &>/dev/null; then
+            random_byte=$((16#$(openssl rand -hex 1 2>/dev/null || echo 00)))
+        else
+            random_byte=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
+        fi
+        local index=$(( ${random_byte:-0} % source_len ))
+        printf '%s' "${source:index:1}"
+    }
+
+    local psk
+    psk="$(random_char_from "$upper")"
+    psk="${psk}$(random_char_from "$lower")"
+    psk="${psk}$(random_char_from "$digit")"
+    psk="${psk}$(random_char_from "$safe_specials")"
+
+    local i
+    for i in $(seq 5 24); do
+        psk="${psk}$(random_char_from "$charset")"
+    done
+
+    printf '%s\n' "$psk"
 }
 
 detect_interface() {
@@ -314,14 +340,22 @@ detect_interface() {
         echo "$default_iface"
         return 0
     fi
-    for iface in $(ls /sys/class/net 2>/dev/null); do
+    for iface_path in /sys/class/net/*; do
+        [ -e "$iface_path" ] || continue
+        iface=${iface_path##*/}
         [[ "$iface" =~ ^(lo|docker|br-|veth|tun|tap) ]] && continue
         if [ -d "/sys/class/net/$iface" ] && ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
             echo "$iface"
             return 0
         fi
     done
-    ls /sys/class/net 2>/dev/null | grep -vE '^(lo|docker|br-|veth|tun|tap)$' | head -1
+    for iface_path in /sys/class/net/*; do
+        [ -e "$iface_path" ] || continue
+        iface=${iface_path##*/}
+        [[ "$iface" =~ ^(lo|docker|br-|veth|tun|tap)$ ]] && continue
+        echo "$iface"
+        return 0
+    done
 }
 
 download_snell_binary() {
@@ -631,7 +665,7 @@ collect_config() {
 
     echo ""
     print_title "密码配置"
-    echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码${NC}"
+    echo -e "${CYAN}说明: 密码用于客户端连接认证，默认随机生成 24 位强密码（包含大小写字母、数字和 ._-）${NC}"
     manual_psk=$(read_yes_no "是否手动设置密码" "n")
     if [[ "$manual_psk" =~ ^[Yy]$ ]]; then
         psk=$(read_with_default "请输入密码" "")
