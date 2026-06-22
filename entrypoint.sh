@@ -12,7 +12,7 @@ trap cleanup TERM INT
 # 工具函数
 # ============================================================
 
-# 生成随机 PSK（24-64 字节）
+# 生成随机 PSK（24-64 位，包含大小写字母、数字和安全特殊符号 ._-）
 random_psk() {
     if [ -r /dev/urandom ]; then
         RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
@@ -23,40 +23,32 @@ random_psk() {
     
     [ "$LENGTH" -lt 24 ] && LENGTH=24
     
-    ALPHABET='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-    ALPHABET_LEN=52
+    UPPER='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    LOWER='abcdefghijklmnopqrstuvwxyz'
+    DIGIT='0123456789'
+    SAFE_SPECIALS='._-'
+    CHARSET="${UPPER}${LOWER}${DIGIT}${SAFE_SPECIALS}"
     
-    ALPHANUM='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-    ALPHANUM_LEN=62
-    
-    CHARSET='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+'
-    CHARSET_LEN=84
-    
-    if [ -r /dev/urandom ]; then
-        RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
-        INDEX=$((RANDOM_BYTE % ALPHABET_LEN))
-    else
-        INDEX=$(($$ % ALPHABET_LEN))
-    fi
-    PSK="$(echo "$ALPHABET" | cut -c$((INDEX+1)))"
-    
-    for i in $(seq 2 $((LENGTH - 1))); do
+    random_char_from() {
+        CHAR_SOURCE=$1
+        CHAR_SOURCE_LEN=${#CHAR_SOURCE}
         if [ -r /dev/urandom ]; then
             RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
-            INDEX=$((RANDOM_BYTE % CHARSET_LEN))
+            INDEX=$((RANDOM_BYTE % CHAR_SOURCE_LEN))
         else
-            INDEX=$(($$ % CHARSET_LEN))
+            INDEX=$(($$ % CHAR_SOURCE_LEN))
         fi
-        PSK="${PSK}$(echo "$CHARSET" | cut -c$((INDEX+1)))"
-    done
+        printf '%s\n' "$CHAR_SOURCE" | cut -c$((INDEX+1))
+    }
     
-    if [ -r /dev/urandom ]; then
-        RANDOM_BYTE=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
-        INDEX=$((RANDOM_BYTE % ALPHANUM_LEN))
-    else
-        INDEX=$(($$ % ALPHANUM_LEN))
-    fi
-    PSK="${PSK}$(echo "$ALPHANUM" | cut -c$((INDEX+1)))"
+    PSK="$(random_char_from "$UPPER")"
+    PSK="${PSK}$(random_char_from "$LOWER")"
+    PSK="${PSK}$(random_char_from "$DIGIT")"
+    PSK="${PSK}$(random_char_from "$SAFE_SPECIALS")"
+    
+    for i in $(seq 5 "$LENGTH"); do
+        PSK="${PSK}$(random_char_from "$CHARSET")"
+    done
     
     echo "$PSK"
 }
