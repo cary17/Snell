@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ============================================================
-# 信号处理
+# 娣団€冲娇婢跺嫮鎮?
 # ============================================================
 cleanup() {
     [ -n "$SNELL_PID" ] && kill -TERM "$SNELL_PID" 2>/dev/null
@@ -9,7 +9,7 @@ cleanup() {
 trap cleanup TERM INT
 
 # ============================================================
-# 工具函数
+# 瀹搞儱鍙块崙鑺ユ殶
 # ============================================================
 
 random_byte() {
@@ -51,7 +51,7 @@ psk_has_required_chars() {
     return 0
 }
 
-# 生成随机 PSK（24-64 位，包含大小写字母、数字和安全特殊符号 ._-=/）
+# Generate a random PSK: 24-64 chars, starts with a letter, ends with alnum.
 random_psk() {
     UPPER='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     LOWER='abcdefghijklmnopqrstuvwxyz'
@@ -79,8 +79,10 @@ random_psk() {
 }
 
 random_port() {
-    RANDOM_WORD=$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ')
-    echo $((10000 + (${RANDOM_WORD:-$$} % 55536)))
+    min_port=${1:-10000}
+    max_port=${2:-65535}
+    port_span=$((max_port - min_port + 1))
+    printf '%s\n' $((min_port + $(random_index "$port_span")))
 }
 
 validate_loglevel() {
@@ -91,8 +93,7 @@ validate_loglevel() {
 }
 
 # ============================================================
-# 网络检测（仅在生成新配置时调用）
-# ============================================================
+# 缂冩垹绮跺Λ鈧ù瀣剁礄娴犲懎婀悽鐔稿灇閺備即鍘ょ純顔芥鐠嬪啰鏁ら敍?# ============================================================
 
 test_connectivity() {
     nc -z -w 2 "$1" "${2:-80}" 2>/dev/null
@@ -176,7 +177,7 @@ get_dns_ip_preference() {
 }
 
 # ============================================================
-# 版本读取
+# 閻楀牊婀扮拠璇插絿
 # ============================================================
 
 get_snell_version() {
@@ -204,22 +205,24 @@ supports_dns() {
     minor=${version_without_v#*.}
     minor=${minor%%.*}
     
-    # v4.1+ 支持 DNS 配置
+    # v4.1+ 閺€顖涘瘮 DNS 闁板秶鐤?
     [ "$major" -gt 4 ] 2>/dev/null && return 0
     [ "$major" -eq 4 ] 2>/dev/null && [ "$minor" -ge 1 ] 2>/dev/null && return 0
     return 1
 }
 
 # ============================================================
-# LISTEN 解析
+# LISTEN 鐟欙絾鐎?
 # ============================================================
 
 parse_listen() {
     major="$1"
     input="$2"
+    min_port="${3:-10000}"
+    max_port="${4:-65535}"
     
     if [ -z "$input" ]; then
-        PORT=$(random_port)
+        PORT=$(random_port "$min_port" "$max_port")
         if [ "$major" -ge 6 ] 2>/dev/null; then
             printf '0.0.0.0:%s, [::]:%s' "$PORT" "$PORT"
         else
@@ -257,77 +260,135 @@ show_config() {
     cat "$CONFIG_FILE"
 }
 
+get_config_meta() {
+    item=$1
+    field=$2
+    item_key=$(printf '%s\n' "$item" | tr '-' '_')
+    eval "printf '%s\n' \"\${CONFIG_${item_key}_${field}:-}\""
+}
+
+env_to_key() {
+    printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | tr '_' '-'
+}
+
+is_allowed_value() {
+    value=$1
+    allowed=$2
+
+    [ -z "$allowed" ] && return 0
+
+    OLD_IFS="$IFS"
+    IFS='|'
+    for candidate in $allowed; do
+        IFS="$OLD_IFS"
+        [ "$value" = "$candidate" ] && return 0
+        IFS='|'
+    done
+    IFS="$OLD_IFS"
+    return 1
+}
+
+generated_config_value() {
+    item=$1
+    generator=$2
+    default_value=$3
+
+    if [ -n "$default_value" ]; then
+        printf '%s\n' "$default_value"
+        return
+    fi
+
+    case "$generator" in
+        listen)
+            min_port=$(get_config_meta "$item" PORT_MIN)
+            max_port=$(get_config_meta "$item" PORT_MAX)
+            parse_listen "$MAJOR_VERSION" "" "${min_port:-10000}" "${max_port:-65535}"
+            ;;
+        psk)
+            random_psk
+            ;;
+        dns)
+            get_dns_value
+            ;;
+        dns_ip_preference)
+            get_dns_ip_preference
+            ;;
+        "")
+            return 1
+            ;;
+        *)
+            echo "Unknown generator for ${item}: ${generator}" >&2
+            return 1
+            ;;
+    esac
+}
+
+resolve_config_value() {
+    item=$1
+    env_name=$(get_config_meta "$item" ENV)
+    enabled=$(get_config_meta "$item" ENABLED)
+    required=$(get_config_meta "$item" REQUIRED)
+    default_value=$(get_config_meta "$item" DEFAULT)
+    generator=$(get_config_meta "$item" GENERATOR)
+    allowed=$(get_config_meta "$item" ALLOWED)
+
+    env_value=$(printenv "$env_name" 2>/dev/null || true)
+    if [ -n "$env_value" ]; then
+        value=$env_value
+    elif [ "$enabled" = "true" ] || [ "$required" = "true" ]; then
+        value=$(generated_config_value "$item" "$generator" "$default_value" || true)
+    else
+        value=""
+    fi
+
+    [ -n "$value" ] || return 1
+
+    if ! is_allowed_value "$value" "$allowed"; then
+        if [ -n "$default_value" ] && is_allowed_value "$default_value" "$allowed"; then
+            value=$default_value
+        else
+            echo "Invalid value for ${env_name}: ${value}" >&2
+            return 1
+        fi
+    fi
+
+    printf '%s\n' "$value"
+}
+
+write_config_items() {
+    for item in $CONFIG_ITEM_NAMES; do
+        key=$(env_to_key "$item")
+        value=$(resolve_config_value "$item" || true)
+        [ -n "$value" ] && echo "${key} = ${value}"
+    done
+}
+
 # ============================================================
-# 主逻辑
+# 娑撳鈧槒绶?
 # ============================================================
 
-MAJOR_VERSION=$(get_major_version)
-CONFIG_FILE="/snell/snell.conf"
+main() {
+    MAJOR_VERSION=$(get_major_version)
+    CONFIG_FILE="/snell/snell.conf"
+    CONFIG_ITEMS_FILE="/snell/config-items.sh"
 
-# 检查配置文件是否存在
-if [ ! -f "$CONFIG_FILE" ]; then
-    # ============================================================
-    # 配置文件不存在，生成新配置（需要网络检测）
-    # ============================================================
+    if [ -r "$CONFIG_ITEMS_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$CONFIG_ITEMS_FILE"
+    else
+        echo "Missing config metadata: $CONFIG_ITEMS_FILE" >&2
+        exit 1
+    fi
+
+    if [ ! -f "$CONFIG_FILE" ]; then
     echo "No existing config, creating new configuration..."
     
-    # ---- PSK ----
-    if [ -n "$PSK" ]; then
-        PSK_VAL="$PSK"
-    else
-        PSK_VAL=$(random_psk)
-    fi
-    
-    # ---- LISTEN ----
-    LISTEN_VAL=$(parse_listen "$MAJOR_VERSION" "${LISTEN:-}")
-    
-    # ---- DNS ----
-    if supports_dns; then
-        DNS_VAL=${DNS:-$(get_dns_value)}
-    else
-        DNS_VAL=""
-    fi
-    
-    # ---- DNS IP PREFERENCE (v6+) ----
-    if is_v6_or_higher; then
-        DNS_IP_PREFERENCE_VAL=${DNS_IP_PREFERENCE:-$(get_dns_ip_preference)}
-    else
-        DNS_IP_PREFERENCE_VAL=""
-    fi
-    
-    # ---- IPv6 (v4 only) ----
-    if ! is_v6_or_higher; then
-        IPV6_VAL=${IPV6:-false}
-    else
-        IPV6_VAL=""
-    fi
-    
-    # ---- MODE (v6+) ----
-    if supports_mode; then
-        MODE_VAL=${MODE:-default}
-        case "$MODE_VAL" in
-            default|unshaped|unsafe-raw) ;;
-            *) MODE_VAL="default" ;;
-        esac
-    else
-        MODE_VAL=""
-    fi
-    
-    # ---- 生成配置文件 ----
+        # Generate configuration file.
     {
         echo "[snell-server]"
-        echo "listen = ${LISTEN_VAL}"
-        echo "psk = ${PSK_VAL}"
+        write_config_items
         
-        [ -n "$DNS_VAL" ] && echo "dns = ${DNS_VAL}"
-        [ -n "$DNS_IP_PREFERENCE_VAL" ] && echo "dns-ip-preference = ${DNS_IP_PREFERENCE_VAL}"
-        [ -n "$IPV6_VAL" ] && echo "ipv6 = ${IPV6_VAL}"
-        [ -n "$EGRESS_INTERFACE" ] && echo "egress-interface = ${EGRESS_INTERFACE}"
-        [ -n "$OBFS" ] && echo "obfs = ${OBFS}"
-        [ -n "$HOST" ] && echo "host = ${HOST}"
-        [ -n "$MODE_VAL" ] && echo "mode = ${MODE_VAL}"
-        
-        # 处理 SNELL_ 前缀的扩展配置
+        # Handle SNELL_ prefixed extension settings.
         for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
             key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
             value=$(printenv "$var" 2>/dev/null || true)
@@ -335,31 +396,33 @@ if [ ! -f "$CONFIG_FILE" ]; then
         done
     } > "$CONFIG_FILE"
     
-    # 显示配置
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        # Show generated configuration.
+        echo "----------------------------------------"
     show_config
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "----------------------------------------"
 
 else
-    # ============================================================
-    # 配置文件已存在，直接使用（不进行网络检测）
-    # ============================================================
     echo "Existing config found, using it as-is..."
     
-    # 显示配置
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        # Show existing configuration.
+        echo "----------------------------------------"
     show_config
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-fi
+        echo "----------------------------------------"
+    fi
 
-# ---- 构建启动命令 ----
-CMD="./snell-server -c $CONFIG_FILE"
-if [ -n "$LOGLEVEL" ] && validate_loglevel "$LOGLEVEL" 2>/dev/null; then
-    CMD="$CMD -l $LOGLEVEL"
-fi
+    # ---- 閺嬪嫬缂撻崥顖氬З閸涙垝鎶?----
+    CMD="./snell-server -c $CONFIG_FILE"
+    if [ -n "$LOGLEVEL" ] && validate_loglevel "$LOGLEVEL" 2>/dev/null; then
+        CMD="$CMD -l $LOGLEVEL"
+    fi
 
-# ---- 启动服务 ----
-echo "Starting snell-server..."
-$CMD &
-SNELL_PID=$!
-wait $SNELL_PID
+    # ---- 閸氼垰濮╅張宥呭 ----
+    echo "Starting snell-server..."
+    $CMD &
+    SNELL_PID=$!
+    wait $SNELL_PID
+}
+
+if [ "${SNELL_ENTRYPOINT_TEST_MODE:-0}" != "1" ]; then
+    main "$@"
+fi

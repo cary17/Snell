@@ -5,6 +5,9 @@ ARG TARGETARCH
 ARG SNELL_VERSION
 ARG GITHUB_REPOSITORY
 
+COPY snell-config.yml /tmp/snell-config.yml
+COPY scripts/generate-config-items.awk /tmp/generate-config-items.awk
+
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
 
 RUN set -ex && \
@@ -33,6 +36,7 @@ RUN set -ex && \
     \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server && \
+    awk -v sn_version="${SNELL_VERSION}" -f /tmp/generate-config-items.awk /tmp/snell-config.yml > /tmp/config-items.sh && \
     echo "${SNELL_VERSION}" > /tmp/snell-version && \
     echo "${MAJOR_VERSION}" > /tmp/snell-major-version
 
@@ -53,6 +57,7 @@ WORKDIR /snell
 COPY --from=builder /tmp/snell-server .
 COPY --from=builder /tmp/snell-version .
 COPY --from=builder /tmp/snell-major-version .
+COPY --from=builder /tmp/config-items.sh .
 COPY entrypoint.sh .
 RUN chmod +x snell-server entrypoint.sh && chmod 755 /snell
 

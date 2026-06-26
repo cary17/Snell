@@ -1,0 +1,84 @@
+items:
+  - name: listen
+    env: LISTEN
+    enabled: true
+    required: true
+    generator: listen
+    port_range:
+      min: 10000
+      max: 65535
+
+  - name: psk
+    env: PSK
+    enabled: true
+    required: true
+    generator: psk
+
+  - name: dns
+    env: DNS
+    enabled: false
+    required: false
+    generator: dns
+    versions:
+      - "4.1+"
+
+  - name: dns-ip-preference
+    env: DNS_IP_PREFERENCE
+    enabled: true
+    required: false
+    generator: dns_ip_preference
+    versions:
+      - "6+"
+    allowed:
+      - default
+      - prefer-ipv4
+      - prefer-ipv6
+      - ipv4-only
+      - ipv6-only
+
+  - name: ipv6
+    env: IPV6
+    enabled: true
+    required: false
+    default: "false"
+    versions:
+      - "3-5"
+    allowed:
+      - "true"
+      - "false"
+
+  - name: egress-interface
+    env: EGRESS_INTERFACE
+    enabled: false
+    required: false
+    versions:
+      - "5+"
+
+  - name: obfs
+    env: OBFS
+    enabled: false
+    required: false
+    versions:
+      - "3-6"
+    allowed:
+      - http
+      - tls
+
+  - name: host
+    env: HOST
+    enabled: false
+    required: false
+    versions:
+      - "3-6"
+
+  - name: mode
+    env: MODE
+    enabled: true
+    required: false
+    default: default
+    versions:
+      - "6+"
+    allowed:
+      - default
+      - unshaped
+      - unsafe-raw
