@@ -1,0 +1,52 @@
+# Template for snell-config.yml.
+# This file is only documentation. The build uses snell-config.yml.
+
+items:
+  # Minimal item. If enabled is true, it is emitted automatically when supported.
+  - name: example-option
+    env: EXAMPLE_OPTION
+    enabled: true
+    required: false
+
+  # Full item showing every supported field.
+  - name: example-advanced-option
+    env: EXAMPLE_ADVANCED_OPTION
+    enabled: false
+    required: false
+    default: default-value
+    generator: ""
+    versions:
+      - "4.1+"
+      - "!5.0.0"
+    allowed:
+      - default-value
+      - other-value
+
+  # listen supports a random port range used when LISTEN is not set.
+  - name: listen
+    env: LISTEN
+    enabled: true
+    required: true
+    generator: listen
+    port_range:
+      min: 10000
+      max: 65535
+
+  # psk should normally keep generator: psk.
+  # If default is set, the default wins over auto-generation.
+  # If PSK env is set, the env value wins over both YAML and auto-generation.
+  - name: psk
+    env: PSK
+    enabled: true
+    required: true
+    generator: psk
+
+  # dns is commonly optional. With enabled: false, it is not auto-generated.
+  # If DNS env is set, it is still written to the generated config.
+  - name: dns
+    env: DNS
+    enabled: false
+    required: false
+    generator: dns
+    versions:
+      - "4.1+"
