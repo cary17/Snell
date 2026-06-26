@@ -14,7 +14,7 @@ items:
 
   - name: dns
     env: DNS
-    enabled: false
+    enabled: true
     generator: dns
     versions:
       - "4.1+"
