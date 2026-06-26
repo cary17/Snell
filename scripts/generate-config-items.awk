@@ -80,7 +80,6 @@ function reset_item() {
     name = ""
     env = ""
     enabled = "true"
-    required = "false"
     default_value = ""
     generator = ""
     port_min = ""
@@ -114,9 +113,9 @@ function emit_item(version_num, allowed, versions, i, key) {
 
     key = shell_key(name)
     printf "CONFIG_ITEM_NAMES=\"${CONFIG_ITEM_NAMES} %s\"\n", name
+    printf "CONFIG_ENV_NAMES=\"${CONFIG_ENV_NAMES} %s\"\n", env
     printf "CONFIG_%s_ENV=%s\n", key, quote(env)
     printf "CONFIG_%s_ENABLED=%s\n", key, quote(enabled)
-    printf "CONFIG_%s_REQUIRED=%s\n", key, quote(required)
     printf "CONFIG_%s_DEFAULT=%s\n", key, quote(default_value)
     printf "CONFIG_%s_GENERATOR=%s\n", key, quote(generator)
     printf "CONFIG_%s_ALLOWED=%s\n", key, quote(allowed)
@@ -129,6 +128,7 @@ BEGIN {
     version_num = normalize_version(sn_version)
     print "# Generated from snell-config.yml. Do not edit."
     print "CONFIG_ITEM_NAMES=\"\""
+    print "CONFIG_ENV_NAMES=\"\""
     reset_item()
 }
 
@@ -156,11 +156,6 @@ name != "" && $0 ~ /^    env:/ {
 
 name != "" && $0 ~ /^    enabled:/ {
     enabled = trim(substr($0, index($0, ":") + 1))
-    next
-}
-
-name != "" && $0 ~ /^    required:/ {
-    required = trim(substr($0, index($0, ":") + 1))
     next
 }
 
