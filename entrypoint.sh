@@ -384,7 +384,18 @@ write_config_items() {
             return name == "TZ" ||
                 name == "LOG" ||
                 name == "LOG_LEVEL" ||
-                name == "LOGLEVEL"
+                name == "LOGLEVEL" ||
+                name == "HOSTNAME" ||
+                name == "HOME" ||
+                name == "PATH" ||
+                name == "PWD" ||
+                name == "OLDPWD" ||
+                name == "SHLVL" ||
+                name == "TERM" ||
+                name == "_" ||
+                name == "SHELL" ||
+                name == "USER" ||
+                name == "LOGNAME"
         }
 
         /^[A-Za-z_][A-Za-z0-9_]*=/ {
@@ -392,13 +403,16 @@ write_config_items() {
             name = substr($0, 1, separator - 1)
             value = substr($0, separator + 1)
 
-            if (value == "" || is_runtime_env(name)) {
-                next
-            }
-            if (name !~ /^[A-Z][A-Z0-9_]+$/) {
+            if (value == "") {
                 next
             }
             if (index(known_envs, " " name " ") > 0) {
+                next
+            }
+            if (is_runtime_env(name)) {
+                next
+            }
+            if (name !~ /^[A-Z][A-Z0-9_]+$/) {
                 next
             }
 
