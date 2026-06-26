@@ -1,0 +1,88 @@
+name: Cleanup workflow runs
+
+on:
+  schedule:
+    # Runs every Friday at 00:00 UTC.
+    - cron: "0 0 * * 5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List workflow runs without deleting them"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cleanup-workflow-runs
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete workflow run history
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - name: Delete workflow runs
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          deleted=0
+          skipped=0
+          failed=0
+
+          echo "Repository: ${REPOSITORY}"
+          echo "Current run: ${CURRENT_RUN_ID}"
+          echo "Dry run: ${DRY_RUN}"
+
+          run_ids_file="$(mktemp)"
+          gh api --paginate "repos/${REPOSITORY}/actions/runs?per_page=100" \
+            --jq ".workflow_runs[].id" > "${run_ids_file}"
+
+          while IFS= read -r run_id; do
+            if [[ -z "${run_id}" ]]; then
+              continue
+            fi
+
+            if [[ "${run_id}" == "${CURRENT_RUN_ID}" ]]; then
+              echo "Skipping current run ${run_id}"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "Would delete run ${run_id}"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if gh api --method DELETE "repos/${REPOSITORY}/actions/runs/${run_id}" >/dev/null; then
+              echo "Deleted run ${run_id}"
+              deleted=$((deleted + 1))
+            else
+              echo "Failed to delete run ${run_id}" >&2
+              failed=$((failed + 1))
+            fi
+          done < "${run_ids_file}"
+
+          {
+            echo "## Workflow run cleanup"
+            echo ""
+            echo "| Result | Count |"
+            echo "| --- | ---: |"
+            echo "| Deleted | ${deleted} |"
+            echo "| Skipped | ${skipped} |"
+            echo "| Failed | ${failed} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if (( failed > 0 )); then
+            exit 1
+          fi
