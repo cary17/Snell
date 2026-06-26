@@ -6,13 +6,11 @@ items:
   - name: example-option
     env: EXAMPLE_OPTION
     enabled: true
-    required: false
 
   # Full item showing every supported field.
   - name: example-advanced-option
     env: EXAMPLE_ADVANCED_OPTION
     enabled: false
-    required: false
     default: default-value
     generator: ""
     versions:
@@ -26,7 +24,6 @@ items:
   - name: listen
     env: LISTEN
     enabled: true
-    required: true
     generator: listen
     port_range:
       min: 10000
@@ -38,7 +35,6 @@ items:
   - name: psk
     env: PSK
     enabled: true
-    required: true
     generator: psk
 
   # dns is commonly optional. With enabled: false, it is not auto-generated.
@@ -46,7 +42,6 @@ items:
   - name: dns
     env: DNS
     enabled: false
-    required: false
     generator: dns
     versions:
       - "4.1+"

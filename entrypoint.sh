@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ============================================================
-# 娣団€冲娇婢跺嫮鎮?
+# Signal handling
 # ============================================================
 cleanup() {
     [ -n "$SNELL_PID" ] && kill -TERM "$SNELL_PID" 2>/dev/null
@@ -9,7 +9,7 @@ cleanup() {
 trap cleanup TERM INT
 
 # ============================================================
-# 瀹搞儱鍙块崙鑺ユ殶
+# Random generation
 # ============================================================
 
 random_byte() {
@@ -93,7 +93,8 @@ validate_loglevel() {
 }
 
 # ============================================================
-# 缂冩垹绮跺Λ鈧ù瀣剁礄娴犲懎婀悽鐔稿灇閺備即鍘ょ純顔芥鐠嬪啰鏁ら敍?# ============================================================
+# Network probing and DNS generation
+# ============================================================
 
 test_connectivity() {
     nc -z -w 2 "$1" "${2:-80}" 2>/dev/null
@@ -177,7 +178,7 @@ get_dns_ip_preference() {
 }
 
 # ============================================================
-# 閻楀牊婀扮拠璇插絿
+# Snell version helpers
 # ============================================================
 
 get_snell_version() {
@@ -205,14 +206,14 @@ supports_dns() {
     minor=${version_without_v#*.}
     minor=${minor%%.*}
     
-    # v4.1+ 閺€顖涘瘮 DNS 闁板秶鐤?
+    # DNS is supported from v4.1.
     [ "$major" -gt 4 ] 2>/dev/null && return 0
     [ "$major" -eq 4 ] 2>/dev/null && [ "$minor" -ge 1 ] 2>/dev/null && return 0
     return 1
 }
 
 # ============================================================
-# LISTEN 鐟欙絾鐎?
+# Listen value parsing
 # ============================================================
 
 parse_listen() {
@@ -323,11 +324,26 @@ generated_config_value() {
     esac
 }
 
+normalize_config_value() {
+    item=$1
+    value=$2
+
+    case "$item" in
+        listen)
+            min_port=$(get_config_meta "$item" PORT_MIN)
+            max_port=$(get_config_meta "$item" PORT_MAX)
+            parse_listen "$MAJOR_VERSION" "$value" "${min_port:-10000}" "${max_port:-65535}"
+            ;;
+        *)
+            printf '%s\n' "$value"
+            ;;
+    esac
+}
+
 resolve_config_value() {
     item=$1
     env_name=$(get_config_meta "$item" ENV)
     enabled=$(get_config_meta "$item" ENABLED)
-    required=$(get_config_meta "$item" REQUIRED)
     default_value=$(get_config_meta "$item" DEFAULT)
     generator=$(get_config_meta "$item" GENERATOR)
     allowed=$(get_config_meta "$item" ALLOWED)
@@ -335,13 +351,14 @@ resolve_config_value() {
     env_value=$(printenv "$env_name" 2>/dev/null || true)
     if [ -n "$env_value" ]; then
         value=$env_value
-    elif [ "$enabled" = "true" ] || [ "$required" = "true" ]; then
+    elif [ "$enabled" = "true" ]; then
         value=$(generated_config_value "$item" "$generator" "$default_value" || true)
     else
         value=""
     fi
 
     [ -n "$value" ] || return 1
+    value=$(normalize_config_value "$item" "$value")
 
     if ! is_allowed_value "$value" "$allowed"; then
         if [ -n "$default_value" ] && is_allowed_value "$default_value" "$allowed"; then
@@ -357,14 +374,45 @@ resolve_config_value() {
 
 write_config_items() {
     for item in $CONFIG_ITEM_NAMES; do
-        key=$(env_to_key "$item")
+        key=$item
         value=$(resolve_config_value "$item" || true)
         [ -n "$value" ] && echo "${key} = ${value}"
     done
+
+    env | awk -v known_envs=" ${CONFIG_ENV_NAMES:-} " '
+        function is_runtime_env(name) {
+            return name == "TZ" ||
+                name == "LOG" ||
+                name == "LOG_LEVEL" ||
+                name == "LOGLEVEL"
+        }
+
+        /^[A-Za-z_][A-Za-z0-9_]*=/ {
+            separator = index($0, "=")
+            name = substr($0, 1, separator - 1)
+            value = substr($0, separator + 1)
+
+            if (value == "" || is_runtime_env(name)) {
+                next
+            }
+            if (name !~ /^[A-Z][A-Z0-9_]+$/) {
+                next
+            }
+            if (index(known_envs, " " name " ") > 0) {
+                next
+            }
+
+            key = name
+            sub(/^SNELL_/, "", key)
+            key = tolower(key)
+            gsub(/_/, "-", key)
+            print key " = " value
+        }
+    '
 }
 
 # ============================================================
-# 娑撳鈧槒绶?
+# Main
 # ============================================================
 
 main() {
@@ -381,42 +429,34 @@ main() {
     fi
 
     if [ ! -f "$CONFIG_FILE" ]; then
-    echo "No existing config, creating new configuration..."
-    
+        echo "No existing config, creating new configuration..."
+
         # Generate configuration file.
-    {
-        echo "[snell-server]"
-        write_config_items
-        
-        # Handle SNELL_ prefixed extension settings.
-        for var in $(env | grep '^SNELL_' | cut -d'=' -f1); do
-            key=$(echo "$var" | sed 's/^SNELL_//' | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-            value=$(printenv "$var" 2>/dev/null || true)
-            [ -n "$value" ] && echo "${key} = ${value}"
-        done
-    } > "$CONFIG_FILE"
-    
+        {
+            echo "[snell-server]"
+            write_config_items
+
+        } > "$CONFIG_FILE"
+
         # Show generated configuration.
         echo "----------------------------------------"
-    show_config
+        show_config
         echo "----------------------------------------"
 
-else
-    echo "Existing config found, using it as-is..."
-    
+    else
+        echo "Existing config found, using it as-is..."
+
         # Show existing configuration.
         echo "----------------------------------------"
-    show_config
+        show_config
         echo "----------------------------------------"
     fi
 
-    # ---- 閺嬪嫬缂撻崥顖氬З閸涙垝鎶?----
     CMD="./snell-server -c $CONFIG_FILE"
     if [ -n "$LOGLEVEL" ] && validate_loglevel "$LOGLEVEL" 2>/dev/null; then
         CMD="$CMD -l $LOGLEVEL"
     fi
 
-    # ---- 閸氼垰濮╅張宥呭 ----
     echo "Starting snell-server..."
     $CMD &
     SNELL_PID=$!
