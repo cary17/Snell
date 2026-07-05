@@ -34,10 +34,10 @@ random_index() {
     done
 }
 
-# Generate a random PSK whose final length is within Snell's 12-255 byte limit.
+# Generate a random PSK with base64 output length within Snell's 12-255 byte limit.
 random_psk() {
-    length=$((12 + $(random_index 244)))
-    head -c 192 /dev/urandom | base64 -w 0 | cut -c 1-$length
+    byte_count=$((7 + $(random_index 183)))
+    head -c "$byte_count" /dev/urandom | base64 -w 0
     printf '\n'
 }
 
