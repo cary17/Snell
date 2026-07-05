@@ -21,13 +21,6 @@ random_byte() {
     printf '%s\n' "${byte:-0}"
 }
 
-random_char_from() {
-    char_source=$1
-    char_source_len=${#char_source}
-    index=$(random_index "$char_source_len")
-    printf '%s\n' "$char_source" | cut -c$((index + 1))
-}
-
 random_index() {
     index_length=$1
     index_limit=$((256 - (256 % index_length)))
@@ -41,41 +34,11 @@ random_index() {
     done
 }
 
-psk_has_required_chars() {
-    psk_candidate=$1
-
-    case "$psk_candidate" in *[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*) ;; *) return 1 ;; esac
-    case "$psk_candidate" in *[abcdefghijklmnopqrstuvwxyz]*) ;; *) return 1 ;; esac
-    case "$psk_candidate" in *[0123456789]*) ;; *) return 1 ;; esac
-    case "$psk_candidate" in *[._=/-]*) ;; *) return 1 ;; esac
-    return 0
-}
-
-# Generate a random PSK: 24-64 chars, starts with a letter, ends with alnum.
+# Generate a random PSK whose final length is within Snell's 12-255 byte limit.
 random_psk() {
-    UPPER='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    LOWER='abcdefghijklmnopqrstuvwxyz'
-    DIGIT='0123456789'
-    SAFE_SPECIALS='._-=/'
-    LETTERS="${UPPER}${LOWER}"
-    ALPHANUM="${LETTERS}${DIGIT}"
-    CHARSET="${UPPER}${LOWER}${DIGIT}${SAFE_SPECIALS}"
-
-    while :; do
-        length=$((24 + $(random_index 41)))
-        psk="$(random_char_from "$LETTERS")"
-
-        position=2
-        while [ "$position" -lt "$length" ]; do
-            psk="${psk}$(random_char_from "$CHARSET")"
-            position=$((position + 1))
-        done
-
-        psk="${psk}$(random_char_from "$ALPHANUM")"
-        psk_has_required_chars "$psk" && break
-    done
-
-    printf '%s\n' "$psk"
+    length=$((12 + $(random_index 244)))
+    head -c 192 /dev/urandom | base64 -w 0 | cut -c 1-$length
+    printf '\n'
 }
 
 random_port() {
