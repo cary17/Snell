@@ -46,6 +46,19 @@ services:
       - PSK=your_password     # 密钥（不设置则随机生成）
 ```
 
+## 本地构建
+
+默认构建会优先从 Snell 官方下载二进制包，失败后再尝试仓库 `Version/` 备份。若要直接使用当前仓库 `Version/` 目录中的二进制包构建，可增加 `USE_LOCAL_BINARY=true`：
+
+```bash
+docker build \
+  --build-arg SNELL_VERSION=v5.0.1 \
+  --build-arg USE_LOCAL_BINARY=true \
+  -t snell:v5.0.1 .
+```
+
+本地包路径需匹配 `Version/vX.Y.Z/snell-server-vX.Y.Z-linux-ARCH.zip`。
+
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |

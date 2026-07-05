@@ -4,9 +4,11 @@ FROM debian:${BASE_TAG} AS builder
 ARG TARGETARCH
 ARG SNELL_VERSION
 ARG GITHUB_REPOSITORY
+ARG USE_LOCAL_BINARY=false
 
 COPY snell-config.yml /tmp/snell-config.yml
 COPY scripts/generate-config-items.awk /tmp/generate-config-items.awk
+COPY Version /tmp/Version
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
 
@@ -23,16 +25,23 @@ RUN set -ex && \
     V_NUM="${SNELL_VERSION#v}" && \
     MAJOR_VERSION="${V_NUM%%.*}" && \
     FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip" && \
+    LOCAL_FILE="/tmp/Version/v${V_NUM}/${FILE}" && \
     LOCAL_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/Version/v${V_NUM}/${FILE}" && \
     OFFICIAL_URL="https://dl.nssurge.com/snell/${FILE}" && \
     \
-    echo "Downloading Snell v${MAJOR_VERSION} from official website..."; \
-    curl -4 -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${OFFICIAL_URL}" || \
-    curl -6 -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${OFFICIAL_URL}" || { \
-        [ -n "${GITHUB_REPOSITORY}" ] || { echo "Official downloads failed and GITHUB_REPOSITORY is not set" >&2; exit 1; }; \
-        echo "Official downloads failed, trying Version/ backup..."; \
-        curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${LOCAL_URL}"; \
-    } && \
+    if [ "${USE_LOCAL_BINARY}" = "true" ]; then \
+        echo "Using local Snell package: ${LOCAL_FILE}"; \
+        [ -f "${LOCAL_FILE}" ] || { echo "Local Snell package not found: ${LOCAL_FILE}" >&2; exit 1; }; \
+        cp "${LOCAL_FILE}" /tmp/s.zip; \
+    else \
+        echo "Downloading Snell v${MAJOR_VERSION} from official website..."; \
+        curl -4 -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${OFFICIAL_URL}" || \
+        curl -6 -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${OFFICIAL_URL}" || { \
+            [ -n "${GITHUB_REPOSITORY}" ] || { echo "Official downloads failed and GITHUB_REPOSITORY is not set" >&2; exit 1; }; \
+            echo "Official downloads failed, trying Version/ backup..."; \
+            curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${LOCAL_URL}"; \
+        }; \
+    fi && \
     \
     unzip -q /tmp/s.zip -d /tmp/ && \
     chmod +x /tmp/snell-server && \
