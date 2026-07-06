@@ -23,12 +23,12 @@ random_byte() {
 
 random_index() {
     index_length=$1
-    index_limit=$((256 - (256 % index_length)))
+    index_limit=$((65536 - (65536 % index_length)))
 
     while :; do
-        byte=$(random_byte)
-        if [ "$byte" -lt "$index_limit" ] 2>/dev/null; then
-            printf '%s\n' $((byte % index_length))
+        value=$(($(random_byte) * 256 + $(random_byte)))
+        if [ "$value" -lt "$index_limit" ] 2>/dev/null; then
+            printf '%s\n' $((value % index_length))
             return
         fi
     done
