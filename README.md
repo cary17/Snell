@@ -64,7 +64,7 @@ docker build \
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `LISTEN` | 监听地址/端口 | 随机端口 (10000-65535) |
-| `PSK` | 预共享密钥 | 随机生成 (Base64 字符，随机读取 7-90 字节，输出长度 12-120 字节) |
+| `PSK` | 预共享密钥 | 随机生成 (`openssl rand --base64`，单行 Base64，长度约 12-180 字节) |
 | `IPV6` | 启用 IPv6 ( v3/v4/v5) | 默认 false |
 | `DNS` | DNS 服务器 | 见下方说明 |
 | `DNS_IP_PREFERENCE` | DNS 偏好 (v6+) | `prefer-ipv4` |
