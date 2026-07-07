@@ -68,7 +68,7 @@ docker build \
 | `IPV6` | 启用 IPv6 ( v3/v4/v5) | 默认 false |
 | `DNS` | DNS 服务器 | 见下方说明 |
 | `DNS_IP_PREFERENCE` | DNS 偏好 (v6+) | `prefer-ipv4` |
-| `LOGLEVEL` | 日志级别，可选 `verbose`、`info`、`notify`、`warning` | Snell 默认值 |
+| `LOGLEVEL` | 日志级别，可选 `info`、`notify`、`warning` | Snell 默认值 |
 | `EGRESS_INTERFACE` | 出口网卡 (v5+) | - |
 | `OBFS` | 混淆模式 (v6-) | - |
 | `HOST` | 混淆域名 (v6-) | - |
