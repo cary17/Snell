@@ -50,7 +50,7 @@ random_port() {
 
 validate_loglevel() {
     case "$1" in
-        verbose|info|notify|warning) return 0 ;;
+        info|notify|warning) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -430,8 +430,13 @@ main() {
     fi
 
     CMD="./snell-server -c $CONFIG_FILE"
-    if [ -n "$LOGLEVEL" ] && validate_loglevel "$LOGLEVEL" 2>/dev/null; then
-        CMD="$CMD -l $LOGLEVEL"
+    if [ -n "$LOGLEVEL" ]; then
+        if validate_loglevel "$LOGLEVEL" 2>/dev/null; then
+            echo "Using log level: $LOGLEVEL"
+            CMD="$CMD -l $LOGLEVEL"
+        else
+            echo "Ignoring unsupported LOGLEVEL: $LOGLEVEL (supported: info, notify, warning)" >&2
+        fi
     fi
 
     echo "Starting snell-server..."
