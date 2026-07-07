@@ -50,7 +50,7 @@ random_port() {
 
 validate_loglevel() {
     case "$1" in
-        debug|info|warning|error|fatal) return 0 ;;
+        verbose|info|notify|warning) return 0 ;;
         *) return 1 ;;
     esac
 }
