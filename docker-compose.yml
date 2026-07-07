@@ -8,7 +8,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       # 同时监听 IPv4 和 IPv6
-      #- LISTE=20001
+      #- LISTEN=20001
       #LISTEN可只写端口同时监听双栈
       - LISTEN=0.0.0.0:20001,[::]:20001
       # 认证密钥（必填）
