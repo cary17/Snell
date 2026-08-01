@@ -50,7 +50,7 @@ random_port() {
 
 validate_loglevel() {
     case "$1" in
-        info|notify|warning) return 0 ;;
+        trace|verbose|info|notify|warning|error) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -435,7 +435,7 @@ main() {
             echo "Using log level: $LOGLEVEL"
             CMD="$CMD -l $LOGLEVEL"
         else
-            echo "Ignoring unsupported LOGLEVEL: $LOGLEVEL (supported: info, notify, warning)" >&2
+            echo "Ignoring unsupported LOGLEVEL: $LOGLEVEL (supported: trace, verbose, info, notify, warning, error)" >&2
         fi
     fi
 

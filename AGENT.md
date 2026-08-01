@@ -183,6 +183,18 @@ HOST=www.example.com
 - Allowed values: `default`, `unshaped`, `unsafe-raw`.
 - Do not supply it to v3-v5.
 
+### 3.9 LOGLEVEL
+
+- Agent key/environment name: `LOGLEVEL`.
+- Agent CLI flag: `--loglevel VALUE`.
+- Optional. If omitted, do not pass `-l`; Snell uses its built-in default level.
+- Supported by all recorded versions from v3.0.1 through v6.0.0rc.
+- Allowed values: `trace`, `verbose`, `info`, `notify`, `warning`, `error`.
+- Values are case-sensitive.
+- Native mode stores the value outside `snell.conf` and adds `-l VALUE` to the service command.
+- Docker mode stores the value in `/opt/snell/.env`; the image entrypoint adds `-l VALUE`.
+- Do not write `log = VALUE` into `snell.conf`.
+
 ## 4. Configuration Input Methods
 
 Configuration file is optional. Command-line values are sufficient.
@@ -225,6 +237,7 @@ REGISTRY=auto
 PORT=20000
 PSK=replace-with-16-to-180-safe-bytes
 DNS=1.1.1.1, 8.8.8.8
+LOGLEVEL=info
 ```
 
 ```bash
