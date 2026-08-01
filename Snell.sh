@@ -8,6 +8,7 @@ readonly SCRIPT_VERSION="3.0"
 readonly SNELL_BIN="/usr/local/bin/snell-server"
 readonly SNELL_CONFIG_DIR="/etc/snell"
 readonly SNELL_CONFIG_FILE="${SNELL_CONFIG_DIR}/snell.conf"
+readonly SNELL_LOGLEVEL_FILE="${SNELL_CONFIG_DIR}/loglevel"
 readonly SNELL_SERVICE_FILE="/etc/systemd/system/snell.service"
 readonly SNELL_INIT_FILE="/etc/init.d/snell"
 readonly SNELL_USER="snell"
@@ -45,6 +46,7 @@ CLI_EGRESS=""
 CLI_OBFS=""
 CLI_HOST=""
 CLI_MODE="default"
+CLI_LOGLEVEL=""
 CLI_ALPINE_FALLBACK="abort"
 CLI_YES=0
 CLI_SET_IPV6=0
@@ -59,6 +61,7 @@ CLI_SET_PSK=0
 CLI_SET_METHOD=0
 CLI_SET_VERSION=0
 CLI_SET_NETWORK=0
+CLI_SET_LOGLEVEL=0
 
 if [[ -t 1 ]]; then
     RED=$'\033[0;31m'
@@ -415,6 +418,13 @@ is_valid_host() {
     [[ "$1" =~ ^[A-Za-z0-9.-]+$ ]]
 }
 
+is_valid_loglevel() {
+    case "$1" in
+        trace|verbose|info|notify|warning|error) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 config_value() {
     local key="$1" file="$2"
     awk -F= -v key="$key" '
@@ -456,6 +466,7 @@ apply_agent_config() {
         OBFS) CLI_OBFS="$value"; CLI_SET_OBFS=1 ;;
         HOST) CLI_HOST="$value"; CLI_SET_HOST=1 ;;
         MODE) CLI_MODE="$value"; CLI_SET_MODE=1 ;;
+        LOGLEVEL) CLI_LOGLEVEL="$value"; CLI_SET_LOGLEVEL=1 ;;
         ALPINE_FALLBACK) CLI_ALPINE_FALLBACK="$value" ;;
         *) error "不支持的 agent 配置项: $key"; return 1 ;;
     esac
@@ -492,6 +503,7 @@ validate_agent_config() {
     fi
     [[ "$CLI_PORT" =~ ^[0-9]+$ ]] && ((10#$CLI_PORT >= 10000 && 10#$CLI_PORT <= 65535)) || { error "PORT 必须在 10000-65535。"; return 1; }
     is_valid_psk "$CLI_PSK" || { error "PSK 必须为 16-180 字节且只含安全字符。"; return 1; }
+    [[ -z "$CLI_LOGLEVEL" ]] || is_valid_loglevel "$CLI_LOGLEVEL" || { error "LOGLEVEL 必须是 trace、verbose、info、notify、warning 或 error。"; return 1; }
     [[ "$CLI_NETWORK" == host || "$CLI_NETWORK" == bridge ]] || { error "NETWORK 必须是 host 或 bridge。"; return 1; }
     [[ "$CLI_REGISTRY" == auto || "$CLI_REGISTRY" == ghcr || "$CLI_REGISTRY" == dockerhub ]] || { error "REGISTRY 无效。"; return 1; }
     [[ -z "$CLI_DNS" ]] || is_valid_dns "$CLI_DNS" || { error "DNS 格式无效。"; return 1; }
@@ -570,7 +582,11 @@ AI agent 使用配置文件：
   bash Snell.sh --agent-uninstall --yes
 
 配置键：METHOD VERSION NETWORK REGISTRY PORT PSK IPV6 DNS DNS_IP_PREFERENCE
-      EGRESS_INTERFACE OBFS HOST MODE ALPINE_FALLBACK
+      EGRESS_INTERFACE OBFS HOST MODE LOGLEVEL ALPINE_FALLBACK
+
+日志等级（可选；省略时使用 Snell 默认等级）：trace verbose info notify warning error
+日志等级不是 Snell 的 snell.conf 配置项，不要写入 "log = ..."。
+原生安装通过服务命令参数 -l 设置；Docker 使用 .env 中的 LOGLEVEL。
 EOF
 }
 
@@ -614,9 +630,16 @@ render_snell_config() {
     fi
 }
 
+render_native_command() {
+    local loglevel="${cfg_loglevel:-}"
+    printf '%s' "$SNELL_BIN"
+    [[ -n "$loglevel" ]] && printf ' -l %s' "$loglevel"
+    printf ' -c %s\n' "$SNELL_CONFIG_FILE"
+}
+
 render_compose() {
     local image="$1" network="$2" port="$3" dns="${4:-}" dns_pref="${5:-}"
-    local ipv6="${6:-}" egress="${7:-}" obfs="${8:-}" host="${9:-}" mode="${10:-}"
+    local ipv6="${6:-}" egress="${7:-}" obfs="${8:-}" host="${9:-}" mode="${10:-}" loglevel="${11:-}"
     printf 'services:\n'
     printf '  snell:\n'
     printf '    image: %s\n' "$image"
@@ -638,12 +661,13 @@ render_compose() {
     [[ -n "$obfs" ]] && printf '      OBFS: "${OBFS}"\n'
     [[ -n "$host" ]] && printf '      HOST: "${HOST}"\n'
     [[ -n "$mode" ]] && printf '      MODE: "${MODE}"\n'
+    [[ -n "$loglevel" ]] && printf '      LOGLEVEL: "${LOGLEVEL}"\n'
     return 0
 }
 
 render_env_file() {
     local port="$1" psk="$2" dns="${3:-}" dns_pref="${4:-}" ipv6="${5:-}"
-    local egress="${6:-}" obfs="${7:-}" host="${8:-}" mode="${9:-}"
+    local egress="${6:-}" obfs="${7:-}" host="${8:-}" mode="${9:-}" loglevel="${10:-}"
     printf 'LISTEN=%s\nPSK=%s\n' "$port" "$psk"
     [[ -n "$dns" ]] && printf 'DNS=%s\n' "$dns"
     [[ -n "$dns_pref" ]] && printf 'DNS_IP_PREFERENCE=%s\n' "$dns_pref"
@@ -652,6 +676,7 @@ render_env_file() {
     [[ -n "$obfs" ]] && printf 'OBFS=%s\n' "$obfs"
     [[ -n "$host" ]] && printf 'HOST=%s\n' "$host"
     [[ -n "$mode" ]] && printf 'MODE=%s\n' "$mode"
+    [[ -n "$loglevel" ]] && printf 'LOGLEVEL=%s\n' "$loglevel"
     return 0
 }
 
@@ -663,6 +688,7 @@ docker_option_values() {
     docker_obfs=""
     docker_host=""
     docker_mode=""
+    docker_loglevel="${cfg_loglevel:-}"
 
     if [[ -z "${cfg_effective_version:-}" || "$cfg_effective_version" == "latest" ]]; then
         return 0
@@ -685,6 +711,7 @@ collect_config() {
     local default_port="${4:-}" default_psk="${5:-}" default_ipv6="${6:-false}"
     local default_dns="${7:-}" default_pref="${8:-prefer-ipv4}" default_egress="${9:-}"
     local default_obfs="${10:-}" default_host="${11:-}" default_mode="${12:-default}"
+    local default_loglevel="${13:-}"
     local value numeric effective="" major=0 obfs_choice
 
     cfg_effective_version="$version_hint"
@@ -706,6 +733,7 @@ collect_config() {
         cfg_obfs="$CLI_OBFS"
         cfg_host="$CLI_HOST"
         cfg_mode="$CLI_MODE"
+        cfg_loglevel="$CLI_LOGLEVEL"
         validate_agent_config
         return 0
     fi
@@ -759,6 +787,10 @@ collect_config() {
         cfg_mode=$(tui_menu "v6+ 工作模式" "选择 Snell v6+ 工作模式。" "${default_mode:-default}" \
             default "default" unshaped "unshaped" unsafe-raw "unsafe-raw") || return 1
     fi
+
+    cfg_loglevel=$(tui_menu "日志等级" "通过 snell-server -l 设置；选择默认则不传递日志参数。" "${default_loglevel:-default}" \
+        default "Snell 默认" trace "trace" verbose "verbose" info "info" notify "notify" warning "warning" error "error") || return 1
+    [[ "$cfg_loglevel" == default ]] && cfg_loglevel=""
 
     if [[ -n "$cfg_effective_version" && "$cfg_effective_version" != "latest" ]] && version_supports_dns "$cfg_effective_version"; then
         while true; do
@@ -827,6 +859,7 @@ show_summary() {
     [[ -n "$cfg_egress" ]] && printf '  出口网卡: %s\n' "$cfg_egress" >&2
     [[ -n "$cfg_obfs" ]] && printf '  混淆: %s -> %s\n' "$cfg_obfs" "$cfg_host" >&2
     [[ -n "$cfg_mode" ]] && printf '  v6+ 模式: %s\n' "$cfg_mode" >&2
+    [[ -n "${cfg_loglevel:-}" ]] && printf '  日志等级: %s\n' "$cfg_loglevel" >&2
     return 0
 }
 
@@ -874,7 +907,22 @@ write_native_config() {
     mv -f "$tmp" "$SNELL_CONFIG_FILE"
 }
 
+write_native_loglevel() {
+    local tmp
+    if [[ -z "${cfg_loglevel:-}" ]]; then
+        rm -f "$SNELL_LOGLEVEL_FILE"
+        return 0
+    fi
+    tmp=$(mktemp "${SNELL_CONFIG_DIR}/loglevel.tmp.XXXXXX")
+    printf '%s\n' "$cfg_loglevel" > "$tmp"
+    chown "$SNELL_USER:$SNELL_GROUP" "$tmp"
+    chmod 640 "$tmp"
+    mv -f "$tmp" "$SNELL_LOGLEVEL_FILE"
+}
+
 write_service_files() {
+    local runtime_args="-c $SNELL_CONFIG_FILE"
+    [[ -n "${cfg_loglevel:-}" ]] && runtime_args="-l $cfg_loglevel $runtime_args"
     SERVICE_KIND="manual"
     if systemd_usable; then
         cat > "$SNELL_SERVICE_FILE" <<EOF
@@ -888,7 +936,7 @@ Type=simple
 User=${SNELL_USER}
 Group=${SNELL_GROUP}
 WorkingDirectory=${SNELL_CONFIG_DIR}
-ExecStart=${SNELL_BIN} -c ${SNELL_CONFIG_FILE}
+ExecStart=${SNELL_BIN} ${runtime_args}
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=32768
@@ -909,7 +957,7 @@ EOF
         chmod 640 /var/log/snell.log
         {
             printf '#!%s\n' "$openrc_run"
-            printf 'name="snell"\ncommand="%s"\ncommand_args="-c %s"\n' "$SNELL_BIN" "$SNELL_CONFIG_FILE"
+            printf 'name="snell"\ncommand="%s"\ncommand_args="%s"\n' "$SNELL_BIN" "$runtime_args"
             printf 'command_user="%s:%s"\ncommand_background=true\npidfile="/run/$RC_SVCNAME.pid"\n' "$SNELL_USER" "$SNELL_GROUP"
             printf 'output_log="/var/log/snell.log"\nerror_log="/var/log/snell.log"\n'
             printf 'depend() {\n    need net\n    after firewall\n}\n'
@@ -1031,6 +1079,7 @@ native_install() {
     mv -f "$stage" "$SNELL_BIN"
     backup_file "$SNELL_CONFIG_FILE"
     write_native_config "$version"
+    write_native_loglevel
     write_service_files
     if ! native_start; then
         error "Snell 文件已安装，但服务启动失败。"
@@ -1159,13 +1208,13 @@ write_docker_files() {
     umask 077
     temp_env=$(mktemp "${DOCKER_DIR}/.env.tmp.XXXXXX")
     render_env_file "$cfg_port" "$cfg_psk" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
-        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" > "$temp_env"
+        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel" > "$temp_env"
     chmod 600 "$temp_env"
     mv -f "$temp_env" "$DOCKER_ENV_FILE"
     umask 022
     temp_compose=$(mktemp "${DOCKER_DIR}/docker-compose.yml.tmp.XXXXXX")
     render_compose "$image" "$network" "$cfg_port" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
-        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" > "$temp_compose"
+        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel" > "$temp_compose"
     chmod 644 "$temp_compose"
     mv -f "$temp_compose" "$DOCKER_COMPOSE_FILE"
 }
@@ -1319,6 +1368,9 @@ show_applied_config() {
     if [[ "$mode" == native ]]; then
         config_file="${SNELL_CONFIG_TEST_FILE:-$SNELL_CONFIG_FILE}"
         cat "$config_file"
+        if [[ -f "$SNELL_LOGLEVEL_FILE" ]]; then
+            printf '运行时日志等级: %s\n' "$(cat "$SNELL_LOGLEVEL_FILE")"
+        fi
     elif [[ -n "${SNELL_CONFIG_TEST_FILE:-}" ]]; then
         cat "$SNELL_CONFIG_TEST_FILE"
     elif docker_container_exists && docker exec snell cat /snell/snell.conf 2>/dev/null; then
@@ -1347,6 +1399,7 @@ show_install_result() {
     printf '监听端口: %s\nPSK: %s\n' "$cfg_port" "$cfg_psk"
     [[ -n "$cfg_dns" ]] && printf 'DNS: %s\n' "$cfg_dns"
     [[ -n "$cfg_obfs" ]] && printf '混淆: %s -> %s\n' "$cfg_obfs" "$cfg_host"
+    [[ -n "${cfg_loglevel:-}" ]] && printf '日志等级: %s\n' "$cfg_loglevel"
     printf '\n客户端配置:\n'
     client_version="latest"
     if is_exact_version "$version"; then client_version="$(version_major "$version")"; elif [[ "$version" =~ ^v?[0-9]+$ ]]; then client_version="$(version_major "$version")"; fi
@@ -1379,6 +1432,7 @@ native_config_defaults() {
     cfg_default_obfs=$(config_value obfs "$SNELL_CONFIG_FILE" || true)
     cfg_default_host=$(config_value host "$SNELL_CONFIG_FILE" || true)
     cfg_default_mode=$(config_value mode "$SNELL_CONFIG_FILE" || printf 'default')
+    cfg_default_loglevel=$(cat "$SNELL_LOGLEVEL_FILE" 2>/dev/null || true)
 
 }
 
@@ -1396,6 +1450,7 @@ docker_config_defaults() {
     cfg_default_obfs=$(dotenv_value OBFS "$DOCKER_ENV_FILE")
     cfg_default_host=$(dotenv_value HOST "$DOCKER_ENV_FILE")
     cfg_default_mode=$(dotenv_value MODE "$DOCKER_ENV_FILE")
+    cfg_default_loglevel=$(dotenv_value LOGLEVEL "$DOCKER_ENV_FILE")
 
 }
 
@@ -1405,6 +1460,9 @@ view_config() {
     title "Snell 配置"
     if [[ "$mode" == native ]]; then
         cat "$config_file"
+        if [[ -f "$SNELL_LOGLEVEL_FILE" ]]; then
+            printf '运行时日志等级: %s\n' "$(cat "$SNELL_LOGLEVEL_FILE")"
+        fi
     elif docker_container_exists; then
         if ! docker exec snell cat /snell/snell.conf 2>/dev/null; then
             if [[ -f "$DOCKER_ENV_FILE" ]]; then
@@ -1466,11 +1524,13 @@ reconfigure() {
         version=$(get_native_version) || { error "无法识别原生 Snell 版本。"; return 1; }
         native_config_defaults
         collect_config native "$version" "" "$cfg_default_port" "$cfg_default_psk" "$cfg_default_ipv6" \
-            "$cfg_default_dns" "$cfg_default_pref" "$cfg_default_egress" "$cfg_default_obfs" "$cfg_default_host" "$cfg_default_mode" || return 1
+            "$cfg_default_dns" "$cfg_default_pref" "$cfg_default_egress" "$cfg_default_obfs" "$cfg_default_host" "$cfg_default_mode" "$cfg_default_loglevel" || return 1
         show_summary "原生二进制" "$version"
         tui_yesno "确认写入新配置并重启 Snell？" "y" || return 0
         backup_file "$SNELL_CONFIG_FILE"
         write_native_config "$version"
+        write_native_loglevel
+        write_service_files
         native_service_action restart || return 1
         show_install_result native "$version"
         return 0
@@ -1480,7 +1540,7 @@ reconfigure() {
     version="$cfg_tag"
     network="$cfg_network"
     collect_config docker "$version" "$network" "$cfg_default_port" "$cfg_default_psk" "$cfg_default_ipv6" \
-        "$cfg_default_dns" "$cfg_default_pref" "$cfg_default_egress" "$cfg_default_obfs" "$cfg_default_host" "$cfg_default_mode" || return 1
+        "$cfg_default_dns" "$cfg_default_pref" "$cfg_default_egress" "$cfg_default_obfs" "$cfg_default_host" "$cfg_default_mode" "$cfg_default_loglevel" || return 1
     show_summary "Docker" "$version" "$network" "$cfg_image"
     tui_yesno "确认更新 Docker Compose 配置并重建容器？" "y" || return 0
     ensure_docker
@@ -1549,15 +1609,18 @@ agent_reconfigure() {
         ((CLI_SET_OBFS)) || CLI_OBFS="${cfg_default_obfs:-none}"
         ((CLI_SET_HOST)) || CLI_HOST="$cfg_default_host"
         ((CLI_SET_MODE)) || CLI_MODE="$cfg_default_mode"
+        ((CLI_SET_LOGLEVEL)) || CLI_LOGLEVEL="$cfg_default_loglevel"
         if ((CLI_SET_OBFS)) && [[ "$CLI_OBFS" == none ]] && ((CLI_SET_HOST == 0)); then CLI_HOST=""; fi
         collect_config native "$version" host "$CLI_PORT" "$CLI_PSK" "$CLI_IPV6" "$CLI_DNS" "$CLI_DNS_PREF" \
-            "$CLI_EGRESS" "$CLI_OBFS" "$CLI_HOST" "$CLI_MODE" "" || return 1
+            "$CLI_EGRESS" "$CLI_OBFS" "$CLI_HOST" "$CLI_MODE" "$CLI_LOGLEVEL" || return 1
         if ((CLI_DRY_RUN)); then
             agent_dry_run
             return 0
         fi
         backup_file "$SNELL_CONFIG_FILE"
         write_native_config "$version"
+        write_native_loglevel
+        write_service_files
         native_service_action restart || return 1
         show_install_result native "$version"
         return 0
@@ -1579,10 +1642,11 @@ agent_reconfigure() {
     ((CLI_SET_OBFS)) || CLI_OBFS="${cfg_default_obfs:-none}"
     ((CLI_SET_HOST)) || CLI_HOST="$cfg_default_host"
     ((CLI_SET_MODE)) || CLI_MODE="${cfg_default_mode:-default}"
+    ((CLI_SET_LOGLEVEL)) || CLI_LOGLEVEL="$cfg_default_loglevel"
 
     if ((CLI_SET_OBFS)) && [[ "$CLI_OBFS" == none ]] && ((CLI_SET_HOST == 0)); then CLI_HOST=""; fi
     collect_config docker "$CLI_VERSION" "$CLI_NETWORK" "$CLI_PORT" "$CLI_PSK" "$CLI_IPV6" "$CLI_DNS" "$CLI_DNS_PREF" \
-        "$CLI_EGRESS" "$CLI_OBFS" "$CLI_HOST" "$CLI_MODE" || return 1
+        "$CLI_EGRESS" "$CLI_OBFS" "$CLI_HOST" "$CLI_MODE" "$CLI_LOGLEVEL" || return 1
     if ((CLI_DRY_RUN)); then
         agent_dry_run
         return 0
@@ -1601,7 +1665,7 @@ uninstall_native() {
         systemctl disable snell >/dev/null 2>&1 || true
         systemctl daemon-reload >/dev/null 2>&1 || true
     fi
-    rm -f "$SNELL_SERVICE_FILE" "$SNELL_INIT_FILE" "$SNELL_BIN" "${SNELL_BIN}.rollback" \
+    rm -f "$SNELL_SERVICE_FILE" "$SNELL_INIT_FILE" "$SNELL_BIN" "$SNELL_LOGLEVEL_FILE" "${SNELL_BIN}.rollback" \
         "${SNELL_BIN}.backup."* "${SNELL_CONFIG_FILE}.backup."*
     rm -rf "$SNELL_CONFIG_DIR"
     if command_exists userdel; then userdel "$SNELL_USER" >/dev/null 2>&1 || true; fi
@@ -1641,7 +1705,7 @@ install_wizard() {
         native "原生二进制（systemd/OpenRC）" docker "Docker 容器（项目镜像）") || return 1
     if [[ "$method" == native ]]; then
         version=$(choose_native_version) || return 1
-        collect_config native "$version" "" "" "" "false" "" "prefer-ipv4" "" "" "" "default" || return 1
+        collect_config native "$version" "" "" "" "false" "" "prefer-ipv4" "" "" "" "default" "" || return 1
         show_summary "原生二进制" "$version"
         tui_yesno "确认安装？" "y" || return 0
         native_install "$version"
@@ -1651,7 +1715,7 @@ install_wizard() {
     version=$(choose_docker_tag) || return 1
     network=$(choose_network) || return 1
     registry=$(choose_registry) || return 1
-    collect_config docker "$version" "$network" "" "" "false" "" "prefer-ipv4" "" "" "" "default" || return 1
+    collect_config docker "$version" "$network" "" "" "false" "" "prefer-ipv4" "" "" "" "default" "" || return 1
     show_summary "Docker" "$version" "$network"
     tui_yesno "确认安装？" "y" || return 0
     docker_install "$version" "$network" "$registry"
@@ -1664,6 +1728,9 @@ agent_dry_run() {
         printf '%s\n' '--- snell.conf ---'
         render_snell_config "$CLI_VERSION" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_dns_pref" \
             "$cfg_egress" "$cfg_obfs" "$cfg_host" "$cfg_mode"
+        printf 'LOGLEVEL=%s\n' "${cfg_loglevel:-<snell-default>}"
+        printf 'COMMAND='
+        render_native_command
         return 0
     fi
     docker_option_values
@@ -1673,10 +1740,10 @@ agent_dry_run() {
     esac
     printf '%s\n' '--- .env ---'
     render_env_file "$cfg_port" "$cfg_psk" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
-        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode"
+        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel"
     printf '%s\n' '--- docker-compose.yml ---'
     render_compose "$image" "$CLI_NETWORK" "$cfg_port" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
-        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode"
+        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel"
 }
 
 agent_install() {
@@ -1698,7 +1765,7 @@ agent_install() {
         fi
     fi
     collect_config "$method" "$CLI_VERSION" "$CLI_NETWORK" "$CLI_PORT" "$CLI_PSK" "$CLI_IPV6" \
-        "$CLI_DNS" "$CLI_DNS_PREF" "$CLI_EGRESS" "$CLI_OBFS" "$CLI_HOST" "$CLI_MODE" || return 1
+        "$CLI_DNS" "$CLI_DNS_PREF" "$CLI_EGRESS" "$CLI_OBFS" "$CLI_HOST" "$CLI_MODE" "$CLI_LOGLEVEL" || return 1
     if ((CLI_DRY_RUN)); then
         agent_dry_run
         return 0
@@ -1737,7 +1804,7 @@ parse_agent_args() {
             --config-file|--config-stdin) [[ "$arg" == --config-file ]] && ((i++)) ;;
             --dry-run) CLI_DRY_RUN=1 ;;
             --yes) CLI_YES=1 ;;
-            --method|--version|--network|--registry|--port|--psk|--ipv6|--dns|--dns-ip-preference|--egress-interface|--obfs|--host|--mode|--alpine-fallback)
+            --method|--version|--network|--registry|--port|--psk|--ipv6|--dns|--dns-ip-preference|--egress-interface|--obfs|--host|--mode|--loglevel|--alpine-fallback)
                 ((i + 1 < ${#args[@]})) || { error "$arg 缺少值"; return 2; }
                 value="${args[++i]}"
                 case "$arg" in
@@ -1754,6 +1821,7 @@ parse_agent_args() {
                     --obfs) CLI_OBFS="$value"; CLI_SET_OBFS=1 ;;
                     --host) CLI_HOST="$value"; CLI_SET_HOST=1 ;;
                     --mode) CLI_MODE="$value"; CLI_SET_MODE=1 ;;
+                    --loglevel) CLI_LOGLEVEL="$value"; CLI_SET_LOGLEVEL=1 ;;
                     --alpine-fallback) CLI_ALPINE_FALLBACK="$value" ;;
                 esac
                 ;;

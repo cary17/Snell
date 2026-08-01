@@ -2,9 +2,9 @@
 *.log
 snell.conf
 
-# Snell 下载文件（如果不想提交到仓库，取消注释下面两行）
-# Version/**/*.zip
-# !Version/.gitkeep
+# Snell 二进制压缩包不纳入后续本地提交
+Version/**/*.zip
+!Version/.gitkeep
 
 # IDE
 .vscode/

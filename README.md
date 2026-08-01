@@ -71,6 +71,7 @@ docker build \
 | `EGRESS_INTERFACE` | 出口网卡 (v5+) | - |
 | `OBFS` | 混淆模式 (v6-) | - |
 | `HOST` | 混淆域名 (v6-) | - |
+| `LOGLEVEL` | 运行时日志等级，由入口脚本转换为 `snell-server -l` | 不设置 |
 
 > **注意**：
 > - 仅 v3/v4/v5 版本需要`IPV6` 配置项，v6+ 版本IPv6 行为由 `dns-ip-preference` 控制
@@ -85,6 +86,23 @@ docker build \
 | 国际网络或无法判断 | `8.8.8.8, 1.1.1.1`，如 IPv6 可用则追加 `2001:4860:4860::8888, 2606:4700:4700::1111` |
 
 未显式设置 `DNS_IP_PREFERENCE` 时，v6+ 会根据 IPv4/IPv6 连通性自动选择 `prefer-ipv4` 或 `prefer-ipv6`。
+
+### 日志等级
+
+`LOGLEVEL` 是可选覆盖项；未设置时不传递 `-l`，Snell 使用自身默认等级，服务仍可正常启动。
+
+实测 v3.0.1 至 v6.0.0rc 均支持以下区分大小写的等级：
+
+`trace`、`verbose`、`info`、`notify`、`warning`、`error`
+
+Docker 示例：
+
+```yaml
+environment:
+  - LOGLEVEL=info
+```
+
+设置 `LOGLEVEL` 时只作为启动参数传给 `snell-server -l`，不是 Snell 的 `snell.conf` 配置项。不要写入 `log = ...`。
 
 ## LISTEN 格式示例
 
@@ -131,7 +149,7 @@ bash Snell.sh --agent-help
 
 Agent 可以省略配置文件，直接通过参数或标准输入提供配置；安装前建议先使用 `--dry-run`。安装脚本支持源码二进制和 Docker Compose 两种方式，并会按所选方式自动检查并安装所需依赖。
 
-- 原生安装：配置写入 `/etc/snell/snell.conf`，修改配置后重启服务。
+- 原生安装：Snell 配置写入 `/etc/snell/snell.conf`；日志等级单独保存并写入 systemd/OpenRC 的启动参数，修改后重启服务。
 - Docker 安装：配置写入 `/opt/snell/.env` 和 `/opt/snell/docker-compose.yml`；普通重启不创建新容器，修改配置或版本时先删除旧容器再重建。
 - PSK 必须为 16-180 字节，并且仅允许字母、数字和 `. _ + = / -`。
 

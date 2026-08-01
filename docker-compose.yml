@@ -9,6 +9,7 @@ services:
       - TZ=Asia/Shanghai
       - LISTEN=20001
       - PSK=your_password
+      # - LOGLEVEL=info  # optional; omit to use Snell's default
       - DNS_IP_PREFERENCE=prefer-ipv4
       - MODE=unshaped    # default、unshaped、unsafe-raw
       #- DNS=8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111
