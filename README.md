@@ -28,7 +28,7 @@ docker run -d \
   --restart always \
   --network host \
   -e LISTEN=20000 \
-  -e PSK=your_password \
+  -e PSK=your_password_16 \
   ghcr.io/cary17/snell:latest
 ```
 
@@ -43,7 +43,7 @@ services:
     network_mode: host
     environment:
       - LISTEN=20000          # 监听端口
-      - PSK=your_password     # 密钥（不设置则随机生成）
+      - PSK=your_password_16  # 密钥（不设置则随机生成）
 ```
 
 ## 本地构建
@@ -64,11 +64,10 @@ docker build \
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `LISTEN` | 监听地址/端口 | 随机端口 (10000-65535) |
-| `PSK` | 预共享密钥 | 随机生成 (`openssl rand --base64`，单行 Base64，长度约 12-180 字节) |
+| `PSK` | 预共享密钥 | 随机生成，必须为 16-180 字节；仅允许字母、数字和 `. _ + = / -` |
 | `IPV6` | 启用 IPv6 ( v3/v4/v5) | 默认 false |
 | `DNS` | DNS 服务器 | 见下方说明 |
 | `DNS_IP_PREFERENCE` | DNS 偏好 (v6+) | `prefer-ipv4` |
-| `LOGLEVEL` | 日志级别，可选 `info`、`notify`、`warning` | Snell 默认值 |
 | `EGRESS_INTERFACE` | 出口网卡 (v5+) | - |
 | `OBFS` | 混淆模式 (v6-) | - |
 | `HOST` | 混淆域名 (v6-) | - |
@@ -107,6 +106,40 @@ docker build \
 
 > **说明**：v3/v4/v5 均使用 `:::端口` 格式实现双栈监听；v6+ 使用 `0.0.0.0:端口, [::]:端口` 格式，更清晰且支持多端口。
 
+### Alpine / musl 系统
+
+官方 Snell 原生二进制不支持当前 Alpine/musl 运行环境。安装脚本选择“原生二进制”时会提示是否改用 Docker：
+
+- 选择“是”：沿用已填写的版本和配置，继续选择 Docker 网络模式及镜像仓库后安装。
+- 选择“否”：取消安装，不下载二进制、不写入原生配置、不创建服务。
+
+不建议通过第三方源在 Alpine 上额外安装 glibc 来强行运行官方二进制；请使用 Docker，或改用 Debian、Ubuntu、Rocky Linux 等 glibc 发行版。
+
+## 安装脚本
+
+普通用户直接运行进入 TUI：
+
+```bash
+bash Snell.sh
+```
+
+AI agent 不需要读取完整脚本，先读取仓库根目录的 [`AGENT.md`](AGENT.md)，或执行：
+
+```bash
+bash Snell.sh --agent-help
+```
+
+Agent 可以省略配置文件，直接通过参数或标准输入提供配置；安装前建议先使用 `--dry-run`。安装脚本支持源码二进制和 Docker Compose 两种方式，并会按所选方式自动检查并安装所需依赖。
+
+- 原生安装：配置写入 `/etc/snell/snell.conf`，修改配置后重启服务。
+- Docker 安装：配置写入 `/opt/snell/.env` 和 `/opt/snell/docker-compose.yml`；普通重启不创建新容器，修改配置或版本时先删除旧容器再重建。
+- PSK 必须为 16-180 字节，并且仅允许字母、数字和 `. _ + = / -`。
+
+```text
+支持的服务管理器：systemd、OpenRC
+支持的包管理器：apt、dnf、yum、pacman、zypper、apk
+```
+
 ## 镜像仓库
 
 ```bash
@@ -130,7 +163,7 @@ docker logs snell
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 [snell-server]
 listen = 0.0.0.0:20000, [::]:20000
-psk = your_password
+psk = your_password_16
 dns = 8.8.8.8, 1.1.1.1, 2001:4860:4860::8888, 2606:4700:4700::1111
 dns-ip-preference = prefer-ipv4
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -141,7 +174,7 @@ dns-ip-preference = prefer-ipv4
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 [snell-server]
 listen = :::20000
-psk = your_password
+psk = your_password_16
 ipv6 = false
 dns = 8.8.8.8, 1.1.1.1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -152,7 +185,7 @@ dns = 8.8.8.8, 1.1.1.1
 - 未设置 `PSK` 时，随机密钥会显示在日志中，方便通过 `docker logs snell` 查看
 - 多端口监听需要 v6+，低版本只使用第一个端口
 - 如需桥接模式，请移除 `--network host` 并添加端口映射 `-p 20000:20000`
-- 容器重启不会改变已生成的配置（配置文件持久化）
+- 容器重启不会改变 `.env` 和 Compose 中的固定配置；修改配置或版本时会删除旧容器并按新配置重建。
 - v6+ 版本IPv6 行为由 `dns-ip-preference` 控制
 - v3/v4/v5 可通过 `IPV6=true/false` 控制是否启用 IPv6
 - 使用 `:::端口` 格式同时监听 IPv4 和 IPv6
