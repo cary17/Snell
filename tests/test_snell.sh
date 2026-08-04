@@ -5,7 +5,8 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 output=$(mktemp)
 config_dir=""
 result_dir=""
-trap 'rm -rf "$output" "${config_dir:-}" "${result_dir:-}"' EXIT
+version_fixture=""
+trap 'rm -rf "$output" "${config_dir:-}" "${result_dir:-}" "${version_fixture:-}"' EXIT
 
 if ! timeout 3 bash "$root/Snell.sh" --self-test >"$output" 2>&1; then
     printf 'Snell.sh --self-test failed or blocked:\n' >&2
@@ -61,4 +62,16 @@ result_dir=""
 (( $(grep -Fc 'show_install_result native "$version"' "$root/Snell.sh") >= 2 ))
 grep -Fq 'show_install_result "native" "$version"' "$root/Snell.sh"
 grep -Fq 'show_applied_config "$mode"' "$root/Snell.sh"
+version_fixture=$(mktemp)
+printf '%s\n' \
+    'https://dl.nssurge.com/snell/snell-server-v6.0.0b4-linux-amd64.zip' \
+    'https://dl.nssurge.com/snell/snell-server-v6.0.0rc-linux-amd64.zip' \
+    'https://dl.nssurge.com/snell/snell-server-v6.0.0rc2-linux-amd64.zip' \
+    'https://dl.nssurge.com/snell/snell-server-v6.0.0rc10-linux-amd64.zip' \
+    'https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip' > "$version_fixture"
+grep -Fq "grep -oP 'snell-server-v\\K[0-9]+\\.[0-9]+\\.[0-9]+(?:[a-z]+[0-9]*)?'" "$root/.github/workflows/build.yml"
+version_output=$(grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z]+[0-9]*)?' "$version_fixture" | sort -Vu)
+expected_versions=$'5.0.1\n6.0.0b4\n6.0.0rc\n6.0.0rc2\n6.0.0rc10'
+[[ "$version_output" == "$expected_versions" ]]
+if grep -Fqx '6.0.0r' <<< "$version_output"; then exit 1; fi
 printf 'test_snell.sh: passed\n'
