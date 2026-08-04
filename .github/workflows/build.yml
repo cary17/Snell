@@ -53,7 +53,7 @@ jobs:
             # 尝试从官网获取最新版本
             for i in {1..5}; do
               VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
-                | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z][0-9]*)?' \
+                | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z]+[0-9]*)?' \
                 | sort -V | tail -n1)
               [ -n "$VERSION" ] && break || sleep 10
             done
@@ -105,11 +105,11 @@ jobs:
           USE_LOCAL_BINARY="${{ github.event.inputs.use_local_binary || 'false' }}"
           PLATFORMS=""
           
-          # 判断是否为测试版（包含字母，如 6.0.0b1）
+          # 判断是否为预发布版（包含字母，如 6.0.0b1 或 6.0.0rc）
           IS_BETA=false
           if echo "$V_NUM" | grep -q '[a-z]'; then
             IS_BETA=true
-            echo "📌 Beta version detected: $VERSION (no local backup)"
+            echo "📌 Pre-release version detected: $VERSION (no local backup)"
           fi
 
           echo "Detecting platforms for Snell v${MAJOR_VERSION}..."
