@@ -12,7 +12,6 @@ on:
       - snell-config.yml
       - scripts/**
       - tests/**
-      - Version/SHA256SUMS
       - Version/**/*.zip
       - docker-compose.yml
       - .github/workflows/build.yml
@@ -34,11 +33,6 @@ on:
         required: false
         type: boolean
         default: false
-      use_local_binary:
-        description: '直接使用仓库 Version/ 目录中的二进制包构建'
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   test:
@@ -55,7 +49,7 @@ jobs:
           sh -n entrypoint.sh
           shellcheck -S warning Snell.sh entrypoint.sh tests/test_snell.sh download-snell.sh
           docker compose config -q
-          sha256sum -c Version/SHA256SUMS
+          while IFS= read -r archive; do unzip -tq "$archive" >/dev/null; done < <(find Version -type f -name '*.zip' -print)
 
   check-version:
     runs-on: ubuntu-latest
@@ -142,99 +136,29 @@ jobs:
           V_NUM="${VERSION#v}"
           MAJOR_VERSION="${{ steps.version.outputs.major_version }}"
           BASE_URL="https://dl.nssurge.com/snell"
-          LOCAL_BASE_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/Version"
-          USE_LOCAL_BINARY="${{ github.event.inputs.use_local_binary || 'false' }}"
           PLATFORMS=""
-          
-          # 判断是否为预发布版（包含字母，如 6.0.0b1 或 6.0.0rc）
-          IS_BETA=false
-          if echo "$V_NUM" | grep -q '[a-z]'; then
-            IS_BETA=true
-            echo "📌 Pre-release version detected: $VERSION (no local backup)"
-          fi
 
           echo "Detecting platforms for Snell v${MAJOR_VERSION}..."
-          
+
           for entry in "linux/amd64:amd64" "linux/386:i386" "linux/arm64:aarch64" "linux/arm/v7:armv7l"; do
             DOCKER_PLAT="${entry%%:*}"
             ARCH="${entry##*:}"
             FILE="snell-server-v${V_NUM}-linux-${ARCH}.zip"
+            LOCAL_FILE="Version/v${V_NUM}/${FILE}"
             FOUND=false
-            
-            if [ "$USE_LOCAL_BINARY" = "true" ]; then
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo "Checking local repository package for $DOCKER_PLAT: $FILE"
-              if [ -f "Version/v${V_NUM}/${FILE}" ]; then
-                FOUND=true
-                echo "✅ ${DOCKER_PLAT} from local repository"
-              else
-                echo "❌ ${DOCKER_PLAT} local package not found"
-              fi
-            # 非测试版：尝试从官方下载
-            elif [ "$IS_BETA" = "false" ]; then
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo "Checking $DOCKER_PLAT: $FILE"
-              
-              # 1. 强制 IPv4 + 超时重试
-              echo "📡 Attempt 1: IPv4 with timeout/retry..."
-              if curl -4 -o /dev/null -s -w "%{http_code}" \
-                --connect-timeout 10 \
-                --max-time 30 \
-                --retry 3 \
-                --retry-delay 5 \
-                --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
-                FOUND=true
-                echo "✅ ${DOCKER_PLAT} from official (IPv4)"
-              else
-                # 2. 尝试 IPv6
-                echo "📡 Attempt 2: IPv6 with timeout/retry..."
-                if curl -6 -o /dev/null -s -w "%{http_code}" \
-                  --connect-timeout 10 \
-                  --max-time 30 \
-                  --retry 3 \
-                  --retry-delay 5 \
-                  --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
-                  FOUND=true
-                  echo "✅ ${DOCKER_PLAT} from official (IPv6)"
-                else
-                  # 3. 官方都失败，使用本地仓库备份
-                  echo "📡 Attempt 3: Official failed, trying local repository..."
-                  if curl -fsSL --head --connect-timeout 10 --max-time 30 \
-                    "${LOCAL_BASE_URL}/v${V_NUM}/${FILE}" > /dev/null 2>&1; then
-                    FOUND=true
-                    echo "✅ ${DOCKER_PLAT} from local repository"
-                  else
-                    echo "❌ ${DOCKER_PLAT} not available anywhere"
-                  fi
-                fi
-              fi
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            if [ -f "$LOCAL_FILE" ]; then
+              FOUND=true
+              echo "✅ ${DOCKER_PLAT} from repository: ${LOCAL_FILE}"
+            elif curl -4 -fsSL --head --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 5 "${BASE_URL}/${FILE}" >/dev/null 2>&1 || \
+                 curl -6 -fsSL --head --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 5 "${BASE_URL}/${FILE}" >/dev/null 2>&1; then
+              FOUND=true
+              echo "✅ ${DOCKER_PLAT} from official fallback"
             else
-              # 测试版：只能从官方下载，没有本地备份
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo "Checking $DOCKER_PLAT (beta): $FILE"
-              
-              # 尝试 IPv4
-              if curl -4 -o /dev/null -s -w "%{http_code}" \
-                --connect-timeout 10 \
-                --max-time 30 \
-                --retry 3 \
-                --retry-delay 5 \
-                --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
-                FOUND=true
-                echo "✅ ${DOCKER_PLAT} from official (IPv4)"
-              elif curl -6 -o /dev/null -s -w "%{http_code}" \
-                --connect-timeout 10 \
-                --max-time 30 \
-                --retry 3 \
-                --retry-delay 5 \
-                --head "${BASE_URL}/${FILE}" 2>/dev/null | grep -q "200"; then
-                FOUND=true
-                echo "✅ ${DOCKER_PLAT} from official (IPv6)"
-              else
-                echo "❌ ${DOCKER_PLAT} not available from official"
-              fi
+              echo "❌ ${DOCKER_PLAT} not available in repository or official source"
             fi
-            
+
             if [ "$FOUND" = "true" ]; then
               PLATFORMS="${PLATFORMS:+${PLATFORMS},}${DOCKER_PLAT}"
             fi
@@ -345,8 +269,7 @@ jobs:
           build-args: |
             SNELL_VERSION=${{ needs.check-version.outputs.version }}
             BASE_TAG=${{ needs.check-version.outputs.debian_tag }}
-            GITHUB_REPOSITORY=${{ github.repository }}
-            USE_LOCAL_BINARY=${{ github.event.inputs.use_local_binary || 'false' }}
+
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/snell:latest
@@ -392,7 +315,8 @@ jobs:
           GHCR_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          ghcr_image="ghcr.io/$GHCR_OWNER/snell:$VERSION"
+          ghcr_repo="ghcr.io/$GHCR_OWNER/snell"
+          ghcr_image="$ghcr_repo:$VERSION"
           ghcr_manifest=$(docker buildx imagetools inspect "$ghcr_image" --format '{{json .Manifest}}')
           ghcr_digest=$(jq -r '.digest' <<< "$ghcr_manifest")
           actual_platforms=$(jq -r '.manifests[] | select(.platform.os != "unknown") | .platform.os + "/" + .platform.architecture + (if .platform.variant then "/" + .platform.variant else "" end)' <<< "$ghcr_manifest" | sort -u | paste -sd, -)
@@ -400,6 +324,34 @@ jobs:
           expected_platforms=$(tr ',' '\n' <<< "$EXPECTED_PLATFORMS" | sort -u | paste -sd, -)
           [[ "$actual_platforms" == "$expected_platforms" ]] || { echo "Platform mismatch: expected=$expected_platforms actual=$actual_platforms" >&2; exit 1; }
           echo "ghcr_digest=$ghcr_digest" >> "$GITHUB_OUTPUT"
+
+          archive_digests=""
+          while IFS= read -r platform; do
+            os=${platform%%/*}
+            remainder=${platform#*/}
+            arch=${remainder%%/*}
+            variant=""
+            [ "$remainder" = "$arch" ] || variant=${remainder#*/}
+            manifest_digest=$(jq -r --arg os "$os" --arg arch "$arch" --arg variant "$variant" '
+              .manifests[]
+              | select(.platform.os == $os and .platform.architecture == $arch)
+              | select((.platform.variant // "") == $variant)
+              | .digest
+            ' <<< "$ghcr_manifest")
+            [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Missing manifest digest for $platform" >&2; exit 1; }
+            exact_image="$ghcr_repo@$manifest_digest"
+            docker pull "$exact_image" >/dev/null
+            container=$(docker create "$exact_image")
+            digest=$(docker cp "$container:/snell-archive-sha256" - | tar -xO | tr -d '\r\n')
+            docker rm "$container" >/dev/null
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid archive SHA-256 for $platform" >&2; exit 1; }
+            archive_digests="${archive_digests}${archive_digests:+$'\n'}${platform}=${digest}"
+          done < <(tr ',' '\n' <<< "$EXPECTED_PLATFORMS")
+          {
+            echo 'archive_digests<<EOF'
+            echo "$archive_digests"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
           if [ -n "$DOCKER_HUB_USERNAME" ]; then
             docker_image="$DOCKER_HUB_USERNAME/snell:$VERSION"
@@ -413,6 +365,7 @@ jobs:
           VERSION: ${{ needs.check-version.outputs.version }}
           PLATFORMS: ${{ needs.check-version.outputs.platforms }}
           IMAGE_DIGEST: ${{ steps.verify-images.outputs.ghcr_digest }}
+          ARCHIVE_DIGESTS: ${{ steps.verify-images.outputs.archive_digests }}
         run: |
           BUILT_FILE=".built-versions"
           RECORD_FILE=".build-records/${VERSION}.txt"
@@ -438,8 +391,13 @@ jobs:
             echo "version=$VERSION"
             echo "commit=$GITHUB_SHA"
             echo "dockerfile_sha256=$(sha256sum Dockerfile | cut -d' ' -f1)"
-            echo "archive_manifest_sha256=$(sha256sum Version/SHA256SUMS | cut -d' ' -f1)"
             echo "platforms=$PLATFORMS"
+            while IFS= read -r item; do
+              platform=${item%%=*}
+              digest=${item#*=}
+              key=$(tr '/.' '__' <<< "$platform")
+              echo "archive_sha256_${key}=$digest"
+            done <<< "$ARCHIVE_DIGESTS"
             echo "image_digest=$IMAGE_DIGEST"
           } > "$RECORD_FILE"
 

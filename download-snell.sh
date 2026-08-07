@@ -67,8 +67,6 @@ for platform in "${PLATFORMS[@]}"; do
     echo "  📡 备份源: ${BACKUP_URL}"
     if wget -q --show-progress --timeout=30 --tries=3 -O "${OUTPUT}" "${BACKUP_URL}" 2>&1; then
         unzip -tq "${OUTPUT}" >/dev/null || { rm -f "${OUTPUT}"; ((FAIL_COUNT+=1)); continue; }
-        checksum=$(grep "  ${OUTPUT}$" Version/SHA256SUMS || true)
-        [[ -n "$checksum" ]] && printf '%s\n' "$checksum" | sha256sum -c -
         SIZE=$(du -h "${OUTPUT}" | cut -f1)
         echo "  ✅ 备份源下载成功 (${SIZE})"
         ((SUCCESS_COUNT+=1))

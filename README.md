@@ -48,16 +48,15 @@ services:
 
 ## 本地构建
 
-默认构建会优先从 Snell 官方下载二进制包，失败后再尝试仓库 `Version/` 备份。若要直接使用当前仓库 `Version/` 目录中的二进制包构建，可增加 `USE_LOCAL_BINARY=true`：
+构建会优先使用仓库 `Version/` 中的固定二进制包；仅当目标版本和架构的 ZIP 不存在时，才从 Snell 官方 HTTPS 地址下载：
 
 ```bash
 docker build \
   --build-arg SNELL_VERSION=v5.0.1 \
-  --build-arg USE_LOCAL_BINARY=true \
   -t snell:v5.0.1 .
 ```
 
-本地包路径需匹配 `Version/vX.Y.Z/snell-server-vX.Y.Z-linux-ARCH.zip`。仓库内归档必须在 `Version/SHA256SUMS` 中有对应条目并通过校验；全新官方版本若尚无预登记摘要，构建会通过 HTTPS 下载并把实际 SHA-256 写入镜像的 `/snell-archive-sha256`，但这只是来源记录，不等同于上游签名验证。
+仓库包路径需匹配 `Version/vX.Y.Z/snell-server-vX.Y.Z-linux-ARCH.zip`。构建会验证 ZIP 可解压，并把实际使用文件的 SHA-256 写入镜像 `/snell-archive-sha256`；发布工作流还会按平台写入 `.build-records/版本.txt`。SHA-256 仅用于来源记录，不作为需要人工同步的构建门禁，也不等同于上游签名验证。
 
 ## 环境变量
 
