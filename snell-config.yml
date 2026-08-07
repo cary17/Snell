@@ -22,6 +22,7 @@ items:
   - name: dns-ip-preference
     env: DNS_IP_PREFERENCE
     enabled: true
+    default: default
     generator: dns_ip_preference
     versions:
       - "6+"
@@ -36,8 +37,9 @@ items:
     env: IPV6
     enabled: true
     default: "false"
+    generator: ipv6
     versions:
-      - "3-5"
+      - "3+"
     allowed:
       - "true"
       - "false"
@@ -52,7 +54,8 @@ items:
     env: OBFS
     enabled: false
     versions:
-      - "3-6"
+      - "3+"
+      - "!6+"
     allowed:
       - http
       - tls
@@ -61,7 +64,8 @@ items:
     env: HOST
     enabled: false
     versions:
-      - "3-6"
+      - "3+"
+      - "!6+"
 
   - name: mode
     env: MODE

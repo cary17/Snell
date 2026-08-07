@@ -39,14 +39,15 @@ CLI_NETWORK="host"
 CLI_REGISTRY="auto"
 CLI_PORT=""
 CLI_PSK=""
-CLI_IPV6="false"
+CLI_IPV6=""
 CLI_DNS=""
-CLI_DNS_PREF="prefer-ipv4"
+CLI_DNS_PREF=""
 CLI_EGRESS=""
 CLI_OBFS=""
 CLI_HOST=""
 CLI_MODE="default"
 CLI_LOGLEVEL=""
+CLI_CONFLICT_POLICY="prompt"
 CLI_ALPINE_FALLBACK="abort"
 CLI_YES=0
 CLI_SET_IPV6=0
@@ -244,7 +245,7 @@ version_supports_dns() {
 version_supports_ipv6_flag() {
     local major
     major=$(version_major "$1")
-    ((major >= 3 && major <= 5))
+    ((major >= 3))
 }
 
 version_supports_egress() {
@@ -256,7 +257,7 @@ version_supports_egress() {
 version_supports_obfs() {
     local major
     major=$(version_major "$1")
-    ((major >= 3 && major <= 6))
+    ((major >= 3 && major <= 5))
 }
 
 version_supports_v6_options() {
@@ -410,6 +411,87 @@ is_valid_dns() {
     [[ -z "$1" || "$1" =~ $pattern ]]
 }
 
+ipv6_from_dns_preference() {
+    case "${1:-default}" in
+        prefer-ipv4|ipv4-only) printf 'false\n' ;;
+        prefer-ipv6|ipv6-only) printf 'true\n' ;;
+        default|'') return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+read_before_deadline() {
+    local deadline="$1" prompt="$2" remaining answer
+    remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || return 1
+    printf '%s' "$prompt" >&2
+    IFS= read -r -t "$remaining" answer || return 1
+    printf '%s\n' "$answer"
+}
+
+resolve_v6_conflict() {
+    local deadline derived choice new_ipv6 new_pref policy="${CLI_CONFLICT_POLICY:-prompt}"
+    [[ "${cfg_effective_version:-}" != latest ]] || return 0
+    version_supports_v6_options "${cfg_effective_version:-0}" || return 0
+
+    case "${cfg_ipv6:-}" in true|false|'') ;; *) error "IPV6 必须是 true 或 false。"; return 1 ;; esac
+    case "${cfg_dns_pref:-default}" in default|prefer-ipv4|prefer-ipv6|ipv4-only|ipv6-only|'') ;; *) error "DNS_IP_PREFERENCE 取值无效。"; return 1 ;; esac
+
+    derived=$(ipv6_from_dns_preference "${cfg_dns_pref:-default}" || true)
+    if [[ -z "${cfg_ipv6:-}" ]]; then
+        cfg_ipv6="$derived"
+        return 0
+    fi
+    [[ -n "$derived" && "$cfg_ipv6" != "$derived" ]] || return 0
+
+    warn "配置冲突：IPV6=$cfg_ipv6 与 DNS_IP_PREFERENCE=$cfg_dns_pref 冲突。"
+    if [[ "$policy" == auto ]]; then
+        cfg_ipv6="$derived"
+        warn "已按 DNS_IP_PREFERENCE 自动使用 IPV6=$cfg_ipv6。"
+        return 0
+    fi
+    if [[ "$policy" == resubmit ]]; then
+        error "请重新提交无冲突的 IPV6 和 DNS_IP_PREFERENCE，或设置 CONFLICT_POLICY=auto。"
+        return 1
+    fi
+
+    printf '%s\n' '请选择处理方式：' '  1) 重新提交不冲突的 IPV6 和 DNS_IP_PREFERENCE' '  2) 按 DNS_IP_PREFERENCE 自动处理' >&2
+    printf '%s\n' '整个处理过程限时 30 秒；超时或 EOF 默认选择 2。' >&2
+    deadline=$((SECONDS + 30))
+    while :; do
+        choice=$(read_before_deadline "$deadline" '请选择 [1/2]：') || choice=2
+        case "$choice" in
+            1)
+                while :; do
+                    new_ipv6=$(read_before_deadline "$deadline" "请输入新的 IPV6（true/false，回车保留 $cfg_ipv6）：") || { choice=2; break; }
+                    new_pref=$(read_before_deadline "$deadline" "请输入新的 DNS_IP_PREFERENCE（default/prefer-ipv4/prefer-ipv6/ipv4-only/ipv6-only，回车保留 $cfg_dns_pref）：") || { choice=2; break; }
+                    new_ipv6="${new_ipv6:-$cfg_ipv6}"
+                    new_pref="${new_pref:-$cfg_dns_pref}"
+                    [[ "$new_ipv6" == true || "$new_ipv6" == false ]] || { warn "IPV6 只能是 true 或 false。"; continue; }
+                    case "$new_pref" in default|prefer-ipv4|prefer-ipv6|ipv4-only|ipv6-only|'') ;; *) warn "DNS_IP_PREFERENCE 取值无效。"; continue ;; esac
+                    derived=$(ipv6_from_dns_preference "${new_pref:-default}" || true)
+                    if [[ -z "$derived" || "$new_ipv6" == "$derived" ]]; then
+                        cfg_ipv6="$new_ipv6"
+                        cfg_dns_pref="$new_pref"
+                        success "已采用新的 IPV6=$cfg_ipv6、DNS_IP_PREFERENCE=${cfg_dns_pref:-default}。"
+                        return 0
+                    fi
+                    warn "新的 IPV6=$new_ipv6 与 DNS_IP_PREFERENCE=$new_pref 仍然冲突。"
+                done
+                [[ "$choice" == 2 ]] || continue
+                ;;&
+            2)
+                cfg_ipv6=$(ipv6_from_dns_preference "$cfg_dns_pref")
+                warn "已按 DNS_IP_PREFERENCE 自动使用 IPV6=$cfg_ipv6。"
+                return 0
+                ;;
+            *)
+                warn "请输入 1 或 2。"
+                ;;
+        esac
+    done
+}
+
 is_valid_interface() {
     [[ -z "$1" || "$1" =~ ^[A-Za-z0-9_.-]+$ ]]
 }
@@ -467,6 +549,7 @@ apply_agent_config() {
         HOST) CLI_HOST="$value"; CLI_SET_HOST=1 ;;
         MODE) CLI_MODE="$value"; CLI_SET_MODE=1 ;;
         LOGLEVEL) CLI_LOGLEVEL="$value"; CLI_SET_LOGLEVEL=1 ;;
+        CONFLICT_POLICY) CLI_CONFLICT_POLICY="$value" ;;
         ALPINE_FALLBACK) CLI_ALPINE_FALLBACK="$value" ;;
         *) error "不支持的 agent 配置项: $key"; return 1 ;;
     esac
@@ -510,15 +593,23 @@ validate_agent_config() {
     [[ -z "$CLI_EGRESS" ]] || is_valid_interface "$CLI_EGRESS" || { error "EGRESS_INTERFACE 格式无效。"; return 1; }
     [[ -z "$CLI_HOST" ]] || is_valid_host "$CLI_HOST" || { error "HOST 格式无效。"; return 1; }
     [[ "$CLI_ALPINE_FALLBACK" == abort || "$CLI_ALPINE_FALLBACK" == docker ]] || { error "ALPINE_FALLBACK 必须是 abort 或 docker。"; return 1; }
+    [[ "$CLI_CONFLICT_POLICY" == prompt || "$CLI_CONFLICT_POLICY" == resubmit || "$CLI_CONFLICT_POLICY" == auto ]] || { error "CONFLICT_POLICY 必须是 prompt、resubmit 或 auto。"; return 1; }
     local major
     major=$(version_major "$CLI_VERSION")
+    if [[ "$major" == latest ]]; then
+        if ((CLI_SET_IPV6 || CLI_SET_DNS || CLI_SET_DNS_PREF || CLI_SET_EGRESS || CLI_SET_OBFS || CLI_SET_HOST || CLI_SET_MODE)); then
+            error "VERSION=latest 无法校验版本专属配置；请使用完整版本或主版本标签（如 v6）。"
+            return 1
+        fi
+        return 0
+    fi
     if ((CLI_SET_DNS)) && ! version_supports_dns "$CLI_VERSION"; then
         error "DNS 仅支持 v4.1+。"
         return 1
     fi
     if ((CLI_SET_IPV6)); then
         [[ "$CLI_IPV6" == false || "$CLI_IPV6" == true ]] || { error "IPV6 必须是 true 或 false。"; return 1; }
-        ((major <= 5)) || { error "IPV6 仅支持 v3-v5。v6+ 使用 DNS_IP_PREFERENCE。"; return 1; }
+        ((major >= 3)) || { error "IPV6 仅支持 v3+。"; return 1; }
     fi
     if ((CLI_SET_DNS_PREF)); then
         [[ "$major" -ge 6 ]] || { error "DNS_IP_PREFERENCE 仅支持 v6+。"; return 1; }
@@ -533,11 +624,11 @@ validate_agent_config() {
         return 1
     fi
     if ((CLI_SET_OBFS)); then
-        ((major >= 3 && major <= 6)) || { error "OBFS/HOST 仅支持 v3-v6。"; return 1; }
+        ((major >= 3 && major <= 5)) || { error "OBFS/HOST 仅支持 v3-v5；v6+ 已由 MODE 取代。"; return 1; }
         if ((major == 3)); then
             [[ "$CLI_OBFS" == none || "$CLI_OBFS" == http || "$CLI_OBFS" == tls ]] || { error "v3 OBFS 取值必须是 none、http 或 tls。"; return 1; }
         else
-            [[ "$CLI_OBFS" == none || "$CLI_OBFS" == http ]] || { error "v4-v6 OBFS 取值必须是 none 或 http。"; return 1; }
+            [[ "$CLI_OBFS" == none || "$CLI_OBFS" == http ]] || { error "v4-v5 OBFS 取值必须是 none 或 http。"; return 1; }
         fi
         if [[ "$CLI_OBFS" != none && -z "$CLI_HOST" ]]; then
             error "启用 OBFS 时必须同时设置 HOST。"
@@ -582,7 +673,9 @@ AI agent 使用配置文件：
   bash Snell.sh --agent-uninstall --yes
 
 配置键：METHOD VERSION NETWORK REGISTRY PORT PSK IPV6 DNS DNS_IP_PREFERENCE
-      EGRESS_INTERFACE OBFS HOST MODE LOGLEVEL ALPINE_FALLBACK
+      EGRESS_INTERFACE OBFS HOST MODE LOGLEVEL ALPINE_FALLBACK CONFLICT_POLICY
+
+CONFLICT_POLICY：prompt（等待最多30秒）、resubmit（要求新值）、auto（按 DNS_IP_PREFERENCE 自动处理）
 
 日志等级（可选；省略时使用 Snell 默认等级）：trace verbose info notify warning error
 日志等级不是 Snell 的 snell.conf 配置项，不要写入 "log = ..."。
@@ -696,9 +789,10 @@ docker_option_values() {
     if version_supports_dns "$cfg_effective_version"; then docker_dns="${cfg_dns:-}"; fi
     if version_supports_v6_options "$cfg_effective_version"; then
         docker_dns_pref="${cfg_dns_pref:-}"
+        docker_ipv6="${cfg_ipv6:-}"
         docker_mode="${cfg_mode:-}"
     fi
-    if version_supports_ipv6_flag "$cfg_effective_version"; then docker_ipv6="${cfg_ipv6:-false}"; fi
+    if ! version_supports_v6_options "$cfg_effective_version" && version_supports_ipv6_flag "$cfg_effective_version"; then docker_ipv6="${cfg_ipv6:-false}"; fi
     if version_supports_egress "$cfg_effective_version"; then docker_egress="${cfg_egress:-}"; fi
     if version_supports_obfs "$cfg_effective_version"; then
         docker_obfs="${cfg_obfs:-}"
@@ -726,15 +820,24 @@ collect_config() {
     if ((NONINTERACTIVE)); then
         cfg_port="$CLI_PORT"
         cfg_psk="$CLI_PSK"
-        cfg_ipv6="$CLI_IPV6"
+        if ((major >= 3 && major <= 5)); then
+            cfg_ipv6="${CLI_IPV6:-false}"
+        else
+            cfg_ipv6="$CLI_IPV6"
+        fi
         cfg_dns="$CLI_DNS"
-        cfg_dns_pref="$CLI_DNS_PREF"
+        if ((major >= 6)); then
+            cfg_dns_pref="${CLI_DNS_PREF:-prefer-ipv4}"
+        else
+            cfg_dns_pref="$CLI_DNS_PREF"
+        fi
         cfg_egress="$CLI_EGRESS"
         cfg_obfs="$CLI_OBFS"
         cfg_host="$CLI_HOST"
         cfg_mode="$CLI_MODE"
         cfg_loglevel="$CLI_LOGLEVEL"
-        validate_agent_config
+        validate_agent_config || return 1
+        resolve_v6_conflict || return 1
         return 0
     fi
 
@@ -784,6 +887,7 @@ collect_config() {
     elif ((major >= 6)); then
         cfg_dns_pref=$(tui_menu "IPv4/IPv6 偏好" "选择 Snell v6+ 的 DNS/IP 偏好。" "${default_pref:-prefer-ipv4}" \
             default "默认" prefer-ipv4 "优先 IPv4" prefer-ipv6 "优先 IPv6" ipv4-only "仅 IPv4" ipv6-only "仅 IPv6") || return 1
+        cfg_ipv6="${default_ipv6:-}"
         cfg_mode=$(tui_menu "v6+ 工作模式" "选择 Snell v6+ 工作模式。" "${default_mode:-default}" \
             default "default" unshaped "unshaped" unsafe-raw "unsafe-raw") || return 1
     fi
@@ -842,6 +946,7 @@ collect_config() {
     if [[ "$method" == "docker" && "$network" == "bridge" && -n "$cfg_egress" ]]; then
         warn "bridge 模式下出口网卡由容器网络决定，请确认镜像能访问该接口。"
     fi
+    resolve_v6_conflict || return 1
     return 0
 }
 
@@ -1635,9 +1740,13 @@ agent_reconfigure() {
     CLI_NETWORK="$cfg_network"
     ((CLI_SET_PORT)) || CLI_PORT="$cfg_default_port"
     ((CLI_SET_PSK)) || CLI_PSK="$cfg_default_psk"
-    ((CLI_SET_IPV6)) || CLI_IPV6="${cfg_default_ipv6:-false}"
+    if ((CLI_SET_IPV6 == 0)); then
+        if version_supports_v6_options "$cfg_effective_version"; then CLI_IPV6="$cfg_default_ipv6"; else CLI_IPV6="${cfg_default_ipv6:-false}"; fi
+    fi
     ((CLI_SET_DNS)) || CLI_DNS="$cfg_default_dns"
-    ((CLI_SET_DNS_PREF)) || CLI_DNS_PREF="${cfg_default_pref:-prefer-ipv4}"
+    if ((CLI_SET_DNS_PREF == 0)); then
+        if version_supports_v6_options "$cfg_effective_version"; then CLI_DNS_PREF="${cfg_default_pref:-prefer-ipv4}"; else CLI_DNS_PREF="$cfg_default_pref"; fi
+    fi
     ((CLI_SET_EGRESS)) || CLI_EGRESS="$cfg_default_egress"
     ((CLI_SET_OBFS)) || CLI_OBFS="${cfg_default_obfs:-none}"
     ((CLI_SET_HOST)) || CLI_HOST="$cfg_default_host"
@@ -1804,7 +1913,7 @@ parse_agent_args() {
             --config-file|--config-stdin) [[ "$arg" == --config-file ]] && ((i++)) ;;
             --dry-run) CLI_DRY_RUN=1 ;;
             --yes) CLI_YES=1 ;;
-            --method|--version|--network|--registry|--port|--psk|--ipv6|--dns|--dns-ip-preference|--egress-interface|--obfs|--host|--mode|--loglevel|--alpine-fallback)
+            --method|--version|--network|--registry|--port|--psk|--ipv6|--dns|--dns-ip-preference|--egress-interface|--obfs|--host|--mode|--loglevel|--alpine-fallback|--conflict-policy)
                 ((i + 1 < ${#args[@]})) || { error "$arg 缺少值"; return 2; }
                 value="${args[++i]}"
                 case "$arg" in
@@ -1823,6 +1932,7 @@ parse_agent_args() {
                     --mode) CLI_MODE="$value"; CLI_SET_MODE=1 ;;
                     --loglevel) CLI_LOGLEVEL="$value"; CLI_SET_LOGLEVEL=1 ;;
                     --alpine-fallback) CLI_ALPINE_FALLBACK="$value" ;;
+                    --conflict-policy) CLI_CONFLICT_POLICY="$value" ;;
                 esac
                 ;;
             --agent-help) agent_help; return 0 ;;

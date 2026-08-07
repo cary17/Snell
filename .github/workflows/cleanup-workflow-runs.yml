@@ -11,6 +11,16 @@ on:
         required: false
         default: false
         type: boolean
+      retention_days:
+        description: "Delete runs older than this many days"
+        required: false
+        default: 90
+        type: number
+      keep_latest:
+        description: "Always keep this many newest completed runs"
+        required: false
+        default: 20
+        type: number
 
 permissions:
   actions: write
@@ -29,11 +39,13 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       CURRENT_RUN_ID: ${{ github.run_id }}
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+      RETENTION_DAYS: ${{ github.event.inputs.retention_days || '90' }}
+      KEEP_LATEST: ${{ github.event.inputs.keep_latest || '20' }}
     steps:
       - name: Delete workflow runs
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
           deleted=0
           skipped=0
@@ -42,18 +54,39 @@ jobs:
           echo "Repository: ${REPOSITORY}"
           echo "Current run: ${CURRENT_RUN_ID}"
           echo "Dry run: ${DRY_RUN}"
+          echo "Retention days: ${RETENTION_DAYS}"
+          echo "Keep latest: ${KEEP_LATEST}"
+          [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] || { echo "Invalid retention days" >&2; exit 1; }
+          [[ "$KEEP_LATEST" =~ ^[0-9]+$ ]] || { echo "Invalid keep_latest" >&2; exit 1; }
+          cutoff=$(date -u -d "${RETENTION_DAYS} days ago" +%s)
 
           run_ids_file="$(mktemp)"
-          gh api --paginate "repos/${REPOSITORY}/actions/runs?per_page=100" \
-            --jq ".workflow_runs[].id" > "${run_ids_file}"
+          if ! gh api --paginate "repos/${REPOSITORY}/actions/runs?status=completed&per_page=100" \
+            --jq '.workflow_runs[] | [.id, .created_at] | @tsv' > "${run_ids_file}"; then
+            echo "Failed to enumerate completed workflow runs" >&2
+            exit 1
+          fi
 
-          while IFS= read -r run_id; do
+          position=0
+          while IFS=$'\t' read -r run_id created_at; do
             if [[ -z "${run_id}" ]]; then
+              continue
+            fi
+
+            position=$((position + 1))
+            if (( position <= KEEP_LATEST )); then
+              skipped=$((skipped + 1))
               continue
             fi
 
             if [[ "${run_id}" == "${CURRENT_RUN_ID}" ]]; then
               echo "Skipping current run ${run_id}"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            created_epoch=$(date -u -d "$created_at" +%s)
+            if (( created_epoch >= cutoff )); then
               skipped=$((skipped + 1))
               continue
             fi

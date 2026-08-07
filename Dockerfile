@@ -10,7 +10,9 @@ COPY snell-config.yml /tmp/snell-config.yml
 COPY scripts/generate-config-items.awk /tmp/generate-config-items.awk
 COPY Version /tmp/Version
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl unzip && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN set -ex && \
     [ -n "${SNELL_VERSION}" ] || { echo "SNELL_VERSION build arg is required" >&2; exit 1; } && \
@@ -42,8 +44,12 @@ RUN set -ex && \
             curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 5 -o /tmp/s.zip "${LOCAL_URL}"; \
         }; \
     fi && \
+    EXPECTED_SHA=$(awk -v path="Version/v${V_NUM}/${FILE}" '$2 == path { print $1 }' /tmp/Version/SHA256SUMS) && \
+    if [ "${USE_LOCAL_BINARY}" = true ] && [ -z "${EXPECTED_SHA}" ]; then echo "Missing SHA256 entry for ${FILE}" >&2; exit 1; fi && \
+    if [ -n "${EXPECTED_SHA}" ]; then printf '%s  %s\n' "${EXPECTED_SHA}" /tmp/s.zip | sha256sum -c -; else echo "No pre-registered SHA256 for new official archive; recording downloaded digest only."; fi && \
     \
     unzip -q /tmp/s.zip -d /tmp/ && \
+    sha256sum /tmp/s.zip | cut -d' ' -f1 > /tmp/snell-archive-sha256 && \
     chmod +x /tmp/snell-server && \
     awk -v sn_version="${SNELL_VERSION}" -f /tmp/generate-config-items.awk /tmp/snell-config.yml > /tmp/config-items.sh && \
     echo "${SNELL_VERSION}" > /tmp/snell-version && \
@@ -53,11 +59,13 @@ FROM debian:${BASE_TAG}
 
 COPY --from=builder /tmp/snell-version /snell-version
 COPY --from=builder /tmp/snell-major-version /snell-major-version
+COPY --from=builder /tmp/snell-archive-sha256 /snell-archive-sha256
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         netcat-openbsd \
+        openssl \
     && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
@@ -68,6 +76,10 @@ COPY --from=builder /tmp/snell-version .
 COPY --from=builder /tmp/snell-major-version .
 COPY --from=builder /tmp/config-items.sh .
 COPY entrypoint.sh .
-RUN chmod +x snell-server entrypoint.sh && chmod 755 /snell
+RUN groupadd --system snell && useradd --system --gid snell --home-dir /snell --shell /usr/sbin/nologin snell && \
+    chmod +x snell-server entrypoint.sh && chown -R snell:snell /snell && chmod 750 /snell
 
+USER snell
+
+STOPSIGNAL SIGTERM
 ENTRYPOINT ["/snell/entrypoint.sh"]

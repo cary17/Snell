@@ -47,6 +47,7 @@ The examples below use `v5.0.1`; replace it with a supported version after check
 7. Agent-mode install/reconfiguration additionally prints a separate **Agent 安装信息** block containing the install method and persistent configuration path.
 8. Normal Docker restart uses `docker compose restart` and does not create a new container.
 9. Docker configuration or version changes use `docker compose down --remove-orphans` followed by `up -d --remove-orphans`.
+10. A mounted `/snell/snell.conf` has highest runtime priority. The entrypoint uses it as-is, does not generate from environment variables, and does not modify the mounted file; read-only mounts are supported.
 10. Native configuration changes rewrite `/etc/snell/snell.conf` and restart the service.
 11. The installer does not run global `docker prune`.
 12. A pre-existing container named `snell` that is not managed by this installer is not adopted or migrated; the operation fails and leaves it untouched.
@@ -64,10 +65,10 @@ The repository currently records these versions:
 | `v4.1.1` | v4.1 | yes on glibc Linux | yes | LISTEN, PSK, IPV6, DNS, OBFS/HOST |
 | `v5.0.0` | v5 | yes on glibc Linux | yes | LISTEN, PSK, IPV6, DNS, EGRESS_INTERFACE, OBFS/HOST |
 | `v5.0.1` | v5 | yes on glibc Linux | yes | LISTEN, PSK, IPV6, DNS, EGRESS_INTERFACE, OBFS/HOST |
-| `v6.0.0b2` | v6 beta | yes on glibc Linux | yes | LISTEN, PSK, DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE, OBFS/HOST |
-| `v6.0.0b3` | v6 beta | yes on glibc Linux | yes | LISTEN, PSK, DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE, OBFS/HOST |
-| `v6.0.0b4` | v6 beta | yes on glibc Linux | yes | LISTEN, PSK, DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE, OBFS/HOST |
-| `v6.0.0rc` | v6 release candidate | yes on glibc Linux | yes | LISTEN, PSK, DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE, OBFS/HOST |
+| `v6.0.0b2` | v6 beta | yes on glibc Linux | yes | LISTEN, PSK, IPV6 (explicit/derived), DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE |
+| `v6.0.0b3` | v6 beta | yes on glibc Linux | yes | LISTEN, PSK, IPV6 (explicit/derived), DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE |
+| `v6.0.0b4` | v6 beta | yes on glibc Linux | yes | LISTEN, PSK, IPV6 (explicit/derived), DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE |
+| `v6.0.0rc` | v6 release candidate | yes on glibc Linux | yes | LISTEN, PSK, IPV6 (explicit/derived), DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE |
 
 `latest` and major Docker tags such as `v6` are valid for Docker only. Native installation requires a complete version such as `v5.0.1`.
 
@@ -81,11 +82,11 @@ The following is the installer/runtime contract. A field marked `no` must not be
 |---|---:|---:|---:|---:|---:|
 | `LISTEN` | yes | yes | yes | yes | yes |
 | `PSK` | yes | yes | yes | yes | yes |
-| `IPV6` | yes | yes | yes | yes | no |
+| `IPV6` | yes | yes | yes | yes | explicit/derived |
 | `DNS` | no | no | yes | yes | yes |
 | `DNS_IP_PREFERENCE` | no | no | no | no | yes |
 | `EGRESS_INTERFACE` | no | no | no | yes | yes |
-| `OBFS` / `HOST` | yes | yes | yes | yes | yes |
+| `OBFS` / `HOST` | yes | yes | yes | yes | no |
 | `MODE` | no | no | no | no | yes |
 
 ### 3.1 LISTEN
@@ -115,10 +116,17 @@ The following is the installer/runtime contract. A field marked `no` must not be
 
 - Agent key/environment name: `IPV6`.
 - Agent CLI flag: `--ipv6 true|false`.
-- Supported only by v3-v5.
+- Direct agent input is supported by v3+; v6+ resolves conflicts with `DNS_IP_PREFERENCE` before persisting Docker configuration.
+- Docker runtime input also accepts `IPV6=true|false` for v6+.
 - Allowed values: `true` or `false`.
-- Default: `false`.
-- Do not supply `IPV6` to v6+; v6+ uses `DNS_IP_PREFERENCE` for address-family preference.
+- Default for v3-v5: `false`.
+- For Docker v6+, `DNS_IP_PREFERENCE` determines the final `ipv6` value:
+  - `prefer-ipv4` / `ipv4-only` -> `ipv6 = false`
+  - `prefer-ipv6` / `ipv6-only` -> `ipv6 = true`
+  - If an explicit `IPV6` conflicts, `Snell.sh` resolves it before writing `.env`/Compose: option `1` resubmits non-conflicting values; option `2` applies the `DNS_IP_PREFERENCE` value. The entire prompt has one 30-second deadline; timeout or EOF defaults to `2`.
+  - Values submitted through option `1` must be non-conflicting before they replace the current values.
+  - `default` or unset preserves explicit `IPV6`; if both are unset, omit both `dns-ip-preference` and `ipv6`.
+- Agent conflict policy is `prompt`, `resubmit`, or `auto`; the prompt uses one 30-second total deadline. Final Docker values are written to `.env` before container creation. Direct container startup does not resolve conflicts: it warns and preserves both valid values. Unknown environment variables are ignored; invalid runtime values for known fields warn and fall back to defaults or omit the optional field. Agent input remains strict and rejects invalid values before persistence.
 
 ### 3.4 DNS
 
@@ -162,9 +170,9 @@ DNS=1.1.1.1, 8.8.8.8, 2001:4860:4860::8888
 
 - Agent key/environment names: `OBFS`, `HOST`.
 - Agent CLI flags: `--obfs VALUE`, `--host DOMAIN`.
-- Supported by v3-v6.
+- Supported only by v3-v5. v6+ rejects both fields and uses `MODE` instead.
 - v3 allowed `OBFS` values: `none`, `http`, `tls`.
-- v4-v6 allowed `OBFS` values: `none`, `http`.
+- v4-v5 allowed `OBFS` values: `none`, `http`.
 - If `OBFS` is `http` or `tls`, `HOST` is required.
 - If `OBFS=none`, `HOST` must be empty.
 - `HOST` allowed characters: ASCII letters, digits, dots and hyphens.
