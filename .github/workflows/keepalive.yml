@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: snell-repository-writer
+  cancel-in-progress: false
+
 jobs:
   keepalive:
     runs-on: ubuntu-latest
