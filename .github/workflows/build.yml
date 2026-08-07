@@ -12,7 +12,6 @@ on:
       - snell-config.yml
       - scripts/**
       - tests/**
-      - Version/**/*.zip
       - docker-compose.yml
       - .github/workflows/build.yml
   schedule:
@@ -103,30 +102,18 @@ jobs:
           echo "major_version=${MAJOR}" >> "$GITHUB_OUTPUT"
           echo "Detected version: ${VERSION} (major: ${MAJOR})"
 
-      - name: 获取已构建版本列表
-        id: built-versions
+      - name: 检查版本构建记录
+        id: build-record
+        env:
+          CURRENT_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # 从本地仓库获取已构建的版本列表
-          BUILT_FILE="https://raw.githubusercontent.com/${{ github.repository }}/main/.built-versions"
-          echo "Fetching built versions from: $BUILT_FILE"
-          
-          # 尝试获取文件，如果不存在则创建空列表
-          if curl -fsSL "$BUILT_FILE" -o /tmp/built-versions.txt 2>/dev/null; then
-            echo "✅ Built versions file found"
-            cat /tmp/built-versions.txt
-          else
-            echo "⚠️  Built versions file not found, creating new one"
-            echo "" > /tmp/built-versions.txt
-          fi
-          
-          # 检查当前版本是否已构建
-          CURRENT_VERSION="${{ steps.version.outputs.version }}"
-          if grep -q "^${CURRENT_VERSION}$" /tmp/built-versions.txt 2>/dev/null; then
+          [[ "$CURRENT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9._-]*$ ]] || { echo "Invalid version" >&2; exit 1; }
+          if [ -f ".build-records/${CURRENT_VERSION}.txt" ]; then
             echo "version_exists=true" >> "$GITHUB_OUTPUT"
-            echo "Version $CURRENT_VERSION already built"
+            echo "Build record found for $CURRENT_VERSION"
           else
             echo "version_exists=false" >> "$GITHUB_OUTPUT"
-            echo "Version $CURRENT_VERSION is new"
+            echo "No build record for $CURRENT_VERSION"
           fi
 
       - name: 检测可用平台
@@ -178,7 +165,7 @@ jobs:
         id: decide
         run: |
           OFFICIAL="${{ steps.version.outputs.version }}"
-          VERSION_EXISTS="${{ steps.built-versions.outputs.version_exists }}"
+          VERSION_EXISTS="${{ steps.build-record.outputs.version_exists }}"
           FORCE_BUILD="${{ github.event.inputs.force }}"
           [ "${{ github.event_name }}" = push ] && FORCE_BUILD=true
           
@@ -209,7 +196,7 @@ jobs:
       contents: write
       packages: write
     concurrency:
-      group: snell-image-publish
+      group: snell-repository-writer
       cancel-in-progress: false
     env:
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
@@ -367,7 +354,6 @@ jobs:
           IMAGE_DIGEST: ${{ steps.verify-images.outputs.ghcr_digest }}
           ARCHIVE_DIGESTS: ${{ steps.verify-images.outputs.archive_digests }}
         run: |
-          BUILT_FILE=".built-versions"
           RECORD_FILE=".build-records/${VERSION}.txt"
           
           git config --global user.name "github-actions[bot]"
@@ -375,17 +361,6 @@ jobs:
           
           git pull origin main
           
-          if [ ! -f "$BUILT_FILE" ]; then
-            echo "# Snell built versions record" > "$BUILT_FILE"
-            echo "# Format: vX.X.X" >> "$BUILT_FILE"
-            echo "" >> "$BUILT_FILE"
-          fi
-          
-          if ! grep -q "^${VERSION}$" "$BUILT_FILE"; then
-            echo "$VERSION" >> "$BUILT_FILE"
-            echo "✅ Added $VERSION to $BUILT_FILE"
-          fi
-
           mkdir -p .build-records
           {
             echo "version=$VERSION"
@@ -401,8 +376,8 @@ jobs:
             echo "image_digest=$IMAGE_DIGEST"
           } > "$RECORD_FILE"
 
-          if ! git diff --quiet -- "$BUILT_FILE" "$RECORD_FILE" || [[ -n "$(git status --short -- "$RECORD_FILE")" ]]; then
-            git add "$BUILT_FILE" "$RECORD_FILE"
+          if ! git diff --quiet -- "$RECORD_FILE" || [[ -n "$(git status --short -- "$RECORD_FILE")" ]]; then
+            git add "$RECORD_FILE"
             git commit -m "chore: record built snell version $VERSION"
             git push origin main
           else

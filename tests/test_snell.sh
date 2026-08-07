@@ -163,7 +163,63 @@ grep -Fq 'Repository package not found, downloading from official website' "$roo
 ! grep -Rq 'SHA256SUMS\|sha256sum -c' "$root/Dockerfile" "$root/.github/workflows/build.yml" "$root/download-snell.sh"
 grep -Fq 'archive_sha256_${key}=' "$root/.github/workflows/build.yml"
 grep -Fq 'exact_image="$ghcr_repo@$manifest_digest"' "$root/.github/workflows/build.yml"
-grep -Fq 'Version/**/*.zip' "$root/.github/workflows/build.yml"
+! grep -Fq 'Version/**/*.zip' "$root/.github/workflows/build.yml"
+! grep -Fq '.built-versions' "$root/.github/workflows/build.yml"
+grep -Fq '.build-records/${CURRENT_VERSION}.txt' "$root/.github/workflows/build.yml"
+grep -Fq "cron: '0 19 * * *'" "$root/.github/workflows/sync-official-archives.yml"
+grep -Fq 'git add -f Version/' "$root/.github/workflows/sync-official-archives.yml"
+test "$(grep -Rh 'group: snell-repository-writer' "$root/.github/workflows/build.yml" "$root/.github/workflows/sync-official-archives.yml" "$root/.github/workflows/keepalive.yml" | wc -l)" -eq 3
+
+(
+    sync_tmp=$(mktemp -d)
+    trap 'rm -rf "$sync_tmp"' EXIT
+    mkdir -p "$sync_tmp/official" "$sync_tmp/repo/Version/v5.0.2" "$sync_tmp/bin"
+    cat > "$sync_tmp/bin/readelf" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+    *extract-amd64*)  printf '  Class: ELF64\n  Machine: Advanced Micro Devices X86-64\n' ;;
+    *extract-i386*)   printf '  Class: ELF32\n  Machine: Intel 80386\n' ;;
+    *extract-aarch64*) printf '  Class: ELF64\n  Machine: AArch64\n' ;;
+    *extract-armv7l*) printf '  Class: ELF32\n  Machine: ARM\n' ;;
+esac
+EOF
+    chmod +x "$sync_tmp/bin/readelf"
+    printf 'old' > "$sync_tmp/repo/Version/v5.0.2/snell-server-v5.0.2-linux-amd64.zip"
+    cp /bin/true "$sync_tmp/snell-server"
+    cd "$sync_tmp"
+    for arch in amd64 i386 aarch64 armv7l; do
+        python3 -m zipfile -c "$sync_tmp/official/snell-server-v5.0.2-linux-${arch}.zip" snell-server
+    done
+    cp "$sync_tmp/official/snell-server-v5.0.2-linux-amd64.zip" "$sync_tmp/official/snell-server-v6.0.0rc2-linux-amd64.zip"
+    printf '%s\n' \
+        'snell-server-v5.0.2-linux-amd64.zip' \
+        'snell-server-v6.0.0rc2-linux-amd64.zip' > "$sync_tmp/releases.md"
+    PATH="$sync_tmp/bin:$PATH" \
+    SNELL_SYNC_ROOT="$sync_tmp/repo" \
+    SNELL_RELEASE_NOTES_URL="file://$sync_tmp/releases.md" \
+    SNELL_DOWNLOAD_BASE_URL="file://$sync_tmp/official" \
+        bash "$root/scripts/sync-official-archives.sh"
+    for arch in amd64 i386 aarch64 armv7l; do
+        cmp -s "$sync_tmp/official/snell-server-v5.0.2-linux-${arch}.zip" \
+            "$sync_tmp/repo/Version/v5.0.2/snell-server-v5.0.2-linux-${arch}.zip"
+    done
+    [ ! -e "$sync_tmp/repo/Version/v6.0.0rc2" ]
+
+    rm -rf "$sync_tmp/repo/Version/v5.0.3"
+    rm -f "$sync_tmp/official/snell-server-v5.0.3-linux-armv7l.zip"
+    for arch in amd64 i386 aarch64; do
+        cp "$sync_tmp/official/snell-server-v5.0.2-linux-${arch}.zip" \
+            "$sync_tmp/official/snell-server-v5.0.3-linux-${arch}.zip"
+    done
+    printf '%s\n' 'snell-server-v5.0.3-linux-amd64.zip' > "$sync_tmp/releases.md"
+    PATH="$sync_tmp/bin:$PATH" \
+    SNELL_SYNC_ROOT="$sync_tmp/repo" \
+    SNELL_RELEASE_NOTES_URL="file://$sync_tmp/releases.md" \
+    SNELL_DOWNLOAD_BASE_URL="file://$sync_tmp/official" \
+        bash "$root/scripts/sync-official-archives.sh"
+    [ ! -e "$sync_tmp/repo/Version/v5.0.3" ]
+)
+
 psk_lengths=$(env -i PATH="$PATH" SNELL_ENTRYPOINT_TEST_MODE=1 sh -c '. "$1"; i=0; while [ "$i" -lt 200 ]; do value=$(random_psk); printf "%s\n" "${#value}"; i=$((i + 1)); done' _ "$root/entrypoint.sh")
 ! awk '$1 < 16 || $1 > 180 { exit 1 }' <<< "$psk_lengths"
 v6_obfs_generated=$(env -i PATH="$PATH" LISTEN=32000 PSK=AgentTestPsk16._-abcdef DNS_IP_PREFERENCE=prefer-ipv4 OBFS=http HOST=example.com \

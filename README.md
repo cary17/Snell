@@ -58,6 +58,8 @@ docker build \
 
 仓库包路径需匹配 `Version/vX.Y.Z/snell-server-vX.Y.Z-linux-ARCH.zip`。构建会验证 ZIP 可解压，并把实际使用文件的 SHA-256 写入镜像 `/snell-archive-sha256`；发布工作流还会按平台写入 `.build-records/版本.txt`。SHA-256 仅用于来源记录，不作为需要人工同步的构建门禁，也不等同于上游签名验证。
 
+仓库每天北京时间 03:00 检查官网正式版二进制。官网文件 SHA-256 变化或出现新正式版时，自动验证 ZIP 与 ELF 架构并更新 `Version/vX.Y.Z/`；测试版不会保存到仓库。此类 `Version/` 更新不会触发镜像构建。构建完成状态只记录在 `.build-records/版本.txt`，不再维护单独的版本列表。
+
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
