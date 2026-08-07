@@ -1,6 +1,0 @@
-version=v4.1.1
-commit=31a9d95a709583ecdccb9c8dba82f279d0d50810
-dockerfile_sha256=bfa32a3972217ccd0db4f57123e44d59de5c3d5de415f5b501c3b91ec9f78a8e
-archive_manifest_sha256=0247d52a31ee8d585beff4f8d2e61250b6d10dee6c07df363f0e9b09cfa369a4
-platforms=linux/amd64,linux/386,linux/arm64,linux/arm/v7
-image_digest=sha256:b22adf1aa327406a23a7e25de3e0e2b6f13b2baaa419436385414ae07ed2ed44
