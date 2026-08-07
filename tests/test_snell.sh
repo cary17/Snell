@@ -156,6 +156,14 @@ unknown_env_generated=$(env -i PATH="$PATH" LISTEN=32000 PSK=AgentTestPsk16._-ab
 ! grep -Fq 'secret-token =' <<< "$unknown_env_generated"
 grep -Fq 'if [ ! -f "$CONFIG_FILE" ]; then' "$root/entrypoint.sh"
 grep -Fq 'Existing config found, using it as-is...' "$root/entrypoint.sh"
+# Repository archives are the fixed source; the official URL is fallback-only.
+grep -Fq 'if [ -f "${LOCAL_FILE}" ]; then' "$root/Dockerfile"
+grep -Fq 'cp "${LOCAL_FILE}" /tmp/s.zip' "$root/Dockerfile"
+grep -Fq 'Repository package not found, downloading from official website' "$root/Dockerfile"
+! grep -Rq 'SHA256SUMS\|sha256sum -c' "$root/Dockerfile" "$root/.github/workflows/build.yml" "$root/download-snell.sh"
+grep -Fq 'archive_sha256_${key}=' "$root/.github/workflows/build.yml"
+grep -Fq 'exact_image="$ghcr_repo@$manifest_digest"' "$root/.github/workflows/build.yml"
+grep -Fq 'Version/**/*.zip' "$root/.github/workflows/build.yml"
 psk_lengths=$(env -i PATH="$PATH" SNELL_ENTRYPOINT_TEST_MODE=1 sh -c '. "$1"; i=0; while [ "$i" -lt 200 ]; do value=$(random_psk); printf "%s\n" "${#value}"; i=$((i + 1)); done' _ "$root/entrypoint.sh")
 ! awk '$1 < 16 || $1 > 180 { exit 1 }' <<< "$psk_lengths"
 v6_obfs_generated=$(env -i PATH="$PATH" LISTEN=32000 PSK=AgentTestPsk16._-abcdef DNS_IP_PREFERENCE=prefer-ipv4 OBFS=http HOST=example.com \
