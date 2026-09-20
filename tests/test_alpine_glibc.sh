@@ -72,86 +72,84 @@ start_case() {
     docker exec "$container" cat /snell/snell.conf > "$results/$version-$case_name.conf"
 }
 
-# Keep the cases scoped to this image's single version.
-for version in "$version"; do
-    docker run --rm --platform "$platform" --entrypoint /snell/snell-server \
-        "$SNELL_TEST_IMAGE" --version > "$results/$version-version.log" 2>&1
-    grep -Fq "snell-server $version (" "$results/$version-version.log"
-    start_case baseline
-    grep -Fxq 'psk = RegressionOnlyPsk16' "$results/$version-baseline.conf"
-    case "$version" in
-        v3.*|v4.0.*)
-            if grep -q '^dns = ' "$results/$version-baseline.conf"; then exit 1; fi
-            ;;
-        *) grep -Fxq 'dns = 1.1.1.1' "$results/$version-baseline.conf" ;;
-    esac
-    docker exec "$container" nc -6 -z -w 1 ::1 32000
-    docker restart -t 5 "$container" >/dev/null
-    sleep 1
-    docker exec "$container" cat /snell/snell.conf | cmp - "$results/$version-baseline.conf"
-    docker exec "$container" nc -z -w 1 127.0.0.1 32000
-    stop_case
+# CI verifies this image's single version.
+docker run --rm --platform "$platform" --entrypoint /snell/snell-server \
+    "$SNELL_TEST_IMAGE" --version > "$results/$version-version.log" 2>&1
+grep -Fq "snell-server $version (" "$results/$version-version.log"
+start_case baseline
+grep -Fxq 'psk = RegressionOnlyPsk16' "$results/$version-baseline.conf"
+case "$version" in
+    v3.*|v4.0.*)
+        if grep -q '^dns = ' "$results/$version-baseline.conf"; then exit 1; fi
+        ;;
+    *) grep -Fxq 'dns = 1.1.1.1' "$results/$version-baseline.conf" ;;
+esac
+docker exec "$container" nc -6 -z -w 1 ::1 32000
+docker restart -t 5 "$container" >/dev/null
+sleep 1
+docker exec "$container" cat /snell/snell.conf | cmp - "$results/$version-baseline.conf"
+docker exec "$container" nc -z -w 1 127.0.0.1 32000
+stop_case
 
-    for level in trace verbose info notify warning error; do
-        start_case "log-$level" -e "LOGLEVEL=$level"
-        stop_case
-    done
-    start_case ipv6 -e IPV6=true
-    grep -Fxq 'ipv6 = true' "$results/$version-ipv6.conf"
+for level in trace verbose info notify warning error; do
+    start_case "log-$level" -e "LOGLEVEL=$level"
     stop_case
-
-    start_case random-psk -e PSK=
-    psk=$(sed -n 's/^psk = //p' "$results/$version-random-psk.conf")
-    [[ ${#psk} -ge 16 && ${#psk} -le 180 ]]
-    stop_case
-
-    start_case invalid-env -e IPV6=banana -e LOGLEVEL=invalid -e UNKNOWN_FIELD=ignored
-    if grep -Eq 'banana|unknown|log =' "$results/$version-invalid-env.conf"; then exit 1; fi
-    stop_case
-
-    mount_config="$results/$version-mounted.conf"
-    printf '[snell-server]\nlisten = 0.0.0.0:32000\npsk = MountedConfigPsk16\n' > "$mount_config"
-    chmod 644 "$mount_config"
-    start_case readonly-config -v "$mount_config:/snell/snell.conf:ro" -e PSK=ignored
-    cmp "$mount_config" "$results/$version-readonly-config.conf"
-    stop_case
-
-    case "$version" in
-        v3*) obfs_modes=http ;; # TLS is retained in production; testing deferred.
-        v4*|v5*) obfs_modes=http ;;
-        *) obfs_modes='' ;;
-    esac
-    for obfs in $obfs_modes; do
-        start_case "obfs-$obfs" -e "OBFS=$obfs" -e HOST=example.com
-        grep -Fxq "obfs = $obfs" "$results/$version-obfs-$obfs.conf"
-        stop_case
-    done
-    case "$version" in
-        v5*|v6*)
-            start_case egress -e EGRESS_INTERFACE=lo
-            grep -Fxq 'egress-interface = lo' "$results/$version-egress.conf"
-            stop_case
-            ;;
-    esac
-    case "$version" in
-        v6*)
-            start_case multiport -e 'LISTEN=32000, 32001'
-            docker exec "$container" nc -z -w 1 127.0.0.1 32001
-            docker exec "$container" nc -6 -z -w 1 ::1 32001
-            stop_case
-            for mode in default unshaped unsafe-raw; do
-                start_case "mode-$mode" -e "MODE=$mode"
-                grep -Fxq "mode = $mode" "$results/$version-mode-$mode.conf"
-                stop_case
-            done
-            for preference in default prefer-ipv4 prefer-ipv6 ipv4-only ipv6-only; do
-                start_case "dns-$preference" -e "DNS_IP_PREFERENCE=$preference"
-                if [[ "$preference" != default ]]; then
-                    grep -Fxq "dns-ip-preference = $preference" "$results/$version-dns-$preference.conf"
-                fi
-                stop_case
-            done
-            ;;
-    esac
 done
+start_case ipv6 -e IPV6=true
+grep -Fxq 'ipv6 = true' "$results/$version-ipv6.conf"
+stop_case
+
+start_case random-psk -e PSK=
+psk=$(sed -n 's/^psk = //p' "$results/$version-random-psk.conf")
+[[ ${#psk} -ge 16 && ${#psk} -le 180 ]]
+stop_case
+
+start_case invalid-env -e IPV6=banana -e LOGLEVEL=invalid -e UNKNOWN_FIELD=ignored
+if grep -Eq 'banana|unknown|log =' "$results/$version-invalid-env.conf"; then exit 1; fi
+stop_case
+
+mount_config="$results/$version-mounted.conf"
+printf '[snell-server]\nlisten = 0.0.0.0:32000\npsk = MountedConfigPsk16\n' > "$mount_config"
+chmod 644 "$mount_config"
+start_case readonly-config -v "$mount_config:/snell/snell.conf:ro" -e PSK=ignored
+cmp "$mount_config" "$results/$version-readonly-config.conf"
+stop_case
+
+case "$version" in
+    v3*) obfs_modes=http ;; # TLS is retained in production; testing deferred.
+    v4*|v5*) obfs_modes=http ;;
+    *) obfs_modes='' ;;
+esac
+for obfs in $obfs_modes; do
+    start_case "obfs-$obfs" -e "OBFS=$obfs" -e HOST=example.com
+    grep -Fxq "obfs = $obfs" "$results/$version-obfs-$obfs.conf"
+    stop_case
+done
+case "$version" in
+    v5*|v6*)
+        start_case egress -e EGRESS_INTERFACE=lo
+        grep -Fxq 'egress-interface = lo' "$results/$version-egress.conf"
+        stop_case
+        ;;
+esac
+case "$version" in
+    v6*)
+        start_case multiport -e 'LISTEN=32000, 32001'
+        docker exec "$container" nc -z -w 1 127.0.0.1 32001
+        docker exec "$container" nc -6 -z -w 1 ::1 32001
+        stop_case
+        for mode in default unshaped unsafe-raw; do
+            start_case "mode-$mode" -e "MODE=$mode"
+            grep -Fxq "mode = $mode" "$results/$version-mode-$mode.conf"
+            stop_case
+        done
+        for preference in default prefer-ipv4 prefer-ipv6 ipv4-only ipv6-only; do
+            start_case "dns-$preference" -e "DNS_IP_PREFERENCE=$preference"
+            if [[ "$preference" != default ]]; then
+                grep -Fxq "dns-ip-preference = $preference" "$results/$version-dns-$preference.conf"
+            fi
+            stop_case
+        done
+        ;;
+esac
 printf 'Results: %s\n' "$results"
