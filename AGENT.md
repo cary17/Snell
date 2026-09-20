@@ -75,6 +75,10 @@ The repository currently records these versions:
 
 Native installation means the official release binary. It requires a glibc-based Linux environment. Alpine/musl cannot execute the official native binary reliably.
 
+Docker images use official `alpine:latest` plus matching-architecture `libc6`, `libstdc++6`, and `libgcc-s1` from `debian:bookworm-slim`. This container runtime does not change the native-installation restriction above. Builds pull the current Alpine stable image; they do not rebuild solely because Alpine changes.
+
+Docker platforms remain amd64, 386, arm64 and arm/v7 where upstream binaries exist. v6.0.0rc2 has no upstream arm/v7 archive. Protocol features remain intact; deferred v3 TLS/v5 QUIC/v6 forwarding and stability/performance acceptance is not a feature removal.
+
 ## 3. Version Configuration Matrix
 
 The following is the installer/runtime contract. A field marked `no` must not be supplied to the agent for that version; the script rejects explicitly supplied unsupported fields instead of silently pretending to apply them.
@@ -99,7 +103,7 @@ The following is the installer/runtime contract. A field marked `no` must not be
   - v3-v5: `listen = :::PORT`
   - v6+: `listen = 0.0.0.0:PORT, [::]:PORT`
 - Docker host mode uses the same port without a host port mapping.
-- Docker bridge mode maps `PORT:PORT`.
+- Docker bridge mode maps both `PORT:PORT/tcp` and `PORT:PORT/udp`; keep UDP for v5 QUIC.
 - The installer rejects a port already in use.
 - v6 runtime supports multiple listen endpoints, but the Agent CLI currently uses one numeric port for a predictable host/bridge mapping. Do not pass comma-separated ports to `--port`.
 
@@ -352,6 +356,8 @@ This removes the managed native service/binary/configuration or Docker Compose d
 ## 6. Alpine/musl Behavior
 
 The official Snell native binary cannot run reliably on Alpine/musl. Do not install third-party glibc packages for this purpose.
+
+This restriction is for native installation on the host. The Docker image carries its own glibc runtime on Alpine, so the existing Docker fallback remains supported without installing glibc on the host.
 
 Interactive TUI behavior:
 

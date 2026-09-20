@@ -1,0 +1,67 @@
+# Compatibility experiment; does not replace the production Dockerfile.
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libc6 libstdc++6 libgcc-s1 ca-certificates curl unzip && \
+    mkdir /runtime && \
+    dpkg-query -W libc6 libstdc++6 libgcc-s1 > /runtime/glibc-packages.txt && \
+    dpkg-query -L libc6 libstdc++6 libgcc-s1 | \
+    grep -E '^/(usr/)?lib(64)?/' | while IFS= read -r path; do \
+        if [ -f "$path" ] || [ -L "$path" ]; then printf '%s\n' "$path"; fi; \
+    done > /tmp/libraries && \
+    tar -chf - -T /tmp/libraries | tar -xf - -C /runtime && \
+    mkdir -p /runtime/usr/share/doc && \
+    cp -a /usr/share/doc/libc6 /usr/share/doc/libstdc++6 /usr/share/doc/libgcc-s1 /runtime/usr/share/doc/
+
+ARG TARGETARCH
+ARG SNELL_VERSIONS="v3.0.1 v4.1.1 v5.0.1 v6.0.0rc2"
+COPY Version /archives
+COPY snell-config.yml scripts/generate-config-items.awk /metadata/
+RUN set -eu; \
+    case "$TARGETARCH" in \
+        amd64) arch=amd64 ;; 386) arch=i386 ;; \
+        arm64) arch=aarch64 ;; arm) arch=armv7l ;; *) exit 1 ;; \
+    esac; \
+    mkdir /samples; \
+    for version in $SNELL_VERSIONS; do \
+        if [ "$arch:$version" = armv7l:v6.0.0rc2 ]; then \
+            echo "$version: upstream armv7l archive absent" >> /samples/unsupported.txt; continue; \
+        fi; \
+        archive="snell-server-${version}-linux-${arch}.zip"; \
+        if [ -f "/archives/$version/$archive" ]; then \
+            cp "/archives/$version/$archive" /tmp/snell.zip; \
+        else \
+            curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 \
+                "https://dl.nssurge.com/snell/$archive" -o /tmp/snell.zip; \
+        fi; \
+        mkdir "/samples/$version"; \
+        unzip -q /tmp/snell.zip -d "/samples/$version"; \
+        chmod +x "/samples/$version/snell-server"; \
+        sha256sum /tmp/snell.zip > "/samples/$version/archive-sha256"; \
+        printf '%s\n' "$version" > "/samples/$version/snell-version"; \
+        major=${version#v}; printf '%s\n' "${major%%.*}" > "/samples/$version/snell-major-version"; \
+        awk -v sn_version="$version" -f /metadata/generate-config-items.awk /metadata/snell-config.yml \
+            > "/samples/$version/config-items.sh"; \
+    done
+
+FROM runtime AS debian-control
+RUN apt-get update && apt-get install -y --no-install-recommends openssl netcat-openbsd && \
+    groupadd --system snell && useradd --system --gid snell snell && \
+    mkdir /snell && chown snell:snell /snell && chmod 750 /snell
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
+WORKDIR /snell
+USER snell
+ENTRYPOINT ["/bin/sh", "-ec", "cp /samples/${SNELL_TEST_VERSION:?Set SNELL_TEST_VERSION}/* /snell/; exec /entrypoint.sh"]
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates netcat-openbsd openssl && \
+    addgroup -S snell && adduser -S -G snell -H snell && \
+    mkdir /snell && chown snell:snell /snell && chmod 750 /snell
+COPY --from=runtime /runtime/ /
+COPY --from=runtime /samples/ /samples/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
+WORKDIR /snell
+USER snell
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/bin/sh", "-ec", "cp /samples/${SNELL_TEST_VERSION:?Set SNELL_TEST_VERSION}/* /snell/; exec /entrypoint.sh"]
