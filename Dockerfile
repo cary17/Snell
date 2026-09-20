@@ -1,8 +1,19 @@
-ARG BASE_TAG=stable-slim
-FROM debian:${BASE_TAG} AS builder
+FROM debian:bookworm-slim AS builder
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl unzip && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl unzip libc6 libstdc++6 libgcc-s1 && \
+    mkdir /runtime && \
+    printf 'source=debian:bookworm-slim\narchitecture=%s\n' "$(dpkg --print-architecture)" > /runtime/glibc-source.txt && \
+    dpkg-query -W libc6 libstdc++6 libgcc-s1 > /runtime/glibc-packages.txt && \
+    dpkg-query -L libc6 libstdc++6 libgcc-s1 | \
+    grep -E '^/(usr/)?lib(64)?/' | while IFS= read -r path; do \
+        if [ -f "$path" ] || [ -L "$path" ]; then printf '%s\n' "$path"; fi; \
+    done > /tmp/libraries && \
+    test -s /tmp/libraries && \
+    tar -chf /tmp/runtime.tar -T /tmp/libraries && \
+    tar -xf /tmp/runtime.tar -C /runtime && rm /tmp/runtime.tar && \
+    mkdir -p /runtime/usr/share/doc && \
+    cp -aL /usr/share/doc/libc6 /usr/share/doc/libstdc++6 /usr/share/doc/libgcc-s1 /runtime/usr/share/doc/ && \
     rm -rf /var/lib/apt/lists/*
 
 ARG TARGETARCH
@@ -42,16 +53,11 @@ RUN set -ex && \
     echo "${SNELL_VERSION}" > /tmp/snell-version && \
     echo "${MAJOR_VERSION}" > /tmp/snell-major-version
 
-FROM debian:${BASE_TAG}
+FROM alpine:latest
 
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates \
-        netcat-openbsd \
-        openssl \
-    && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+RUN apk add --no-cache ca-certificates netcat-openbsd openssl
+# Preserve Debian library paths (including /lib64 on amd64), not Alpine substitutes.
+COPY --from=builder /runtime/ /
 
 COPY --from=builder /tmp/snell-version /snell-version
 COPY --from=builder /tmp/snell-major-version /snell-major-version
@@ -63,7 +69,7 @@ COPY --from=builder /tmp/snell-version .
 COPY --from=builder /tmp/snell-major-version .
 COPY --from=builder /tmp/config-items.sh .
 COPY entrypoint.sh .
-RUN groupadd --system snell && useradd --system --gid snell --home-dir /snell --shell /usr/sbin/nologin snell && \
+RUN addgroup -S snell && adduser -S -G snell -H -h /snell -s /sbin/nologin snell && \
     chmod +x snell-server entrypoint.sh && chown -R snell:snell /snell && chmod 750 /snell
 
 USER snell

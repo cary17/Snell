@@ -22,11 +22,6 @@ on:
         description: 'Snell版本 (如 3.0.1、4.0.1、6.0.0b1, 留空自动获取)'
         required: false
         type: string
-      debian_version:
-        description: 'Debian 标签 (如 12-slim, stable-slim)'
-        required: false
-        default: 'stable-slim'
-        type: string
       force:
         description: '强制构建'
         required: false
@@ -45,6 +40,7 @@ jobs:
           bash tests/test_snell.sh
           bash Snell.sh --self-test
           for script in Snell.sh download-snell.sh tests/*.sh scripts/*.sh; do bash -n "$script"; done
+          python3 -m py_compile tests/test_alpine_forwarding.py
           sh -n entrypoint.sh
           shellcheck -S warning Snell.sh entrypoint.sh tests/*.sh download-snell.sh scripts/*.sh
           docker compose config -q
@@ -52,7 +48,7 @@ jobs:
 
       - name: Verify container startup and graceful shutdown
         run: |
-          docker build --build-arg SNELL_VERSION=v5.0.1 -t snell-test:local .
+          docker build --pull --build-arg SNELL_VERSION=v5.0.1 -t snell-test:local .
           SNELL_TEST_IMAGE=snell-test:local bash tests/test_container.sh
 
   check-version:
@@ -61,19 +57,10 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       major_version: ${{ steps.version.outputs.major_version }}
       should_build: ${{ steps.decide.outputs.should_build }}
-      debian_tag: ${{ steps.debian.outputs.tag }}
       platforms: ${{ steps.platforms.outputs.list }}
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: 确定 Debian 版本
-        id: debian
-        env:
-          INPUT_DEBIAN_VERSION: ${{ github.event.inputs.debian_version || 'stable-slim' }}
-        run: |
-          [[ "$INPUT_DEBIAN_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "Invalid Debian tag" >&2; exit 1; }
-          echo "tag=$INPUT_DEBIAN_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: 获取 Snell 版本
         id: version
@@ -247,7 +234,6 @@ jobs:
           platforms: ${{ needs.check-version.outputs.platforms }}
           build-args: |
             SNELL_VERSION=${{ needs.check-version.outputs.version }}
-            BASE_TAG=${{ needs.check-version.outputs.debian_tag }}
 
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
@@ -260,7 +246,6 @@ jobs:
         env:
           VERSION: ${{ needs.check-version.outputs.version }}
           MAJOR_VERSION: ${{ needs.check-version.outputs.major_version }}
-          DEBIAN_TAG: ${{ needs.check-version.outputs.debian_tag }}
           PLATFORMS: ${{ needs.check-version.outputs.platforms }}
           GHCR_OWNER: ${{ github.repository_owner }}
         run: |
@@ -268,7 +253,7 @@ jobs:
           echo "✅ 镜像构建成功！"
           echo "版本: $VERSION"
           echo "主版本: $MAJOR_VERSION"
-          echo "Debian 标签: $DEBIAN_TAG"
+          echo "运行镜像: alpine:latest; glibc 来源: debian:bookworm-slim"
           echo "支持平台: $PLATFORMS"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "拉取镜像:"
@@ -284,12 +269,15 @@ jobs:
           VERSION: ${{ needs.check-version.outputs.version }}
           EXPECTED_PLATFORMS: ${{ needs.check-version.outputs.platforms }}
           GHCR_OWNER: ${{ github.repository_owner }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           ghcr_repo="ghcr.io/$GHCR_OWNER/snell"
-          ghcr_image="$ghcr_repo:$VERSION"
+          [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid build digest" >&2; exit 1; }
+          ghcr_image="$ghcr_repo@$BUILD_DIGEST"
           ghcr_manifest=$(docker buildx imagetools inspect "$ghcr_image" --format '{{json .Manifest}}')
           ghcr_digest=$(jq -r '.digest' <<< "$ghcr_manifest")
+          [[ "$ghcr_digest" == "$BUILD_DIGEST" ]] || { echo "Build digest mismatch" >&2; exit 1; }
           actual_platforms=$(jq -r '.manifests[] | select(.platform.os != "unknown") | .platform.os + "/" + .platform.architecture + (if .platform.variant then "/" + .platform.variant else "" end)' <<< "$ghcr_manifest" | sort -u | paste -sd, -)
           # shellcheck disable=SC2153 # EXPECTED_PLATFORMS is supplied by the step env.
           expected_platforms=$(tr ',' '\n' <<< "$EXPECTED_PLATFORMS" | sort -u | paste -sd, -)
@@ -311,8 +299,15 @@ jobs:
             ' <<< "$ghcr_manifest")
             [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Missing manifest digest for $platform" >&2; exit 1; }
             exact_image="$ghcr_repo@$manifest_digest"
-            docker pull "$exact_image" >/dev/null
-            container=$(docker create "$exact_image")
+            docker pull --platform "$platform" "$exact_image" >/dev/null
+            # Gate rolling tags and success records on the actual published platform digest.
+            SNELL_TEST_IMAGE="$exact_image" SNELL_TEST_PLATFORM="$platform" SNELL_TEST_VERSION="$VERSION" \
+              bash tests/test_alpine_glibc.sh
+            if [[ "$platform" == linux/amd64 && "$VERSION" =~ ^v[345]\. ]]; then
+              sudo env SNELL_TEST_IMAGE="$exact_image" SNELL_TEST_VERSION="$VERSION" \
+                python3 tests/test_alpine_forwarding.py
+            fi
+            container=$(docker create --platform "$platform" "$exact_image")
             digest=$(docker cp "$container:/snell-archive-sha256" - | tar -xO | tr -d '\r\n')
             docker rm "$container" >/dev/null
             [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid archive SHA-256 for $platform" >&2; exit 1; }
