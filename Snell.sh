@@ -789,7 +789,8 @@ render_compose() {
         printf '    network_mode: host\n'
     else
         printf '    ports:\n'
-        printf '      - "${LISTEN}:${LISTEN}"\n'
+        printf '      - "${LISTEN}:${LISTEN}/tcp"\n'
+        printf '      - "${LISTEN}:${LISTEN}/udp"\n'
     fi
     printf '    environment:\n'
     printf '      LISTEN: "${LISTEN}"\n'

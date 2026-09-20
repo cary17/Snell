@@ -7,6 +7,16 @@
 
 `linux/amd64` | `linux/386` | `linux/arm64` | `linux/arm/v7`
 
+每个 Snell 版本只发布其上游提供二进制的平台；例如 v6.0.0rc2 保留 amd64、386、arm64，没有 arm/v7 包。
+
+## 基础镜像
+
+运行阶段使用官方 `alpine:latest`；GitHub 构建设置 `pull: true`，每次实际构建都拉取当时最新正式版，不使用 `edge`。Alpine 更新本身不额外触发构建，现有 Snell 版本检查、定时和强制构建规则保持不变。
+
+同一次多阶段构建从 `debian:bookworm-slim` 提取同架构的 `libc6`、`libstdc++6`、`libgcc-s1`，包含 glibc 加载器和版权文件。Alpine 工具继续使用 musl，Snell 使用这套同源运行库，不依赖 `gcompat` 或社区 glibc 镜像。来源和包版本分别保存在 `/glibc-source.txt`、`/glibc-packages.txt`。
+
+Snell 二进制不做补丁或功能裁剪；原入口脚本、配置项、非 root 运行、配置挂载和停止信号行为保留。v3 TLS、v5 QUIC、v6 转发能力仍由原版二进制提供；暂缓对应互通测试及长期稳定性/性能测试，不代表删除这些功能。
+
 ## 快速开始
 
 ### 基础运行（自动生成随机 PSK 和端口）
@@ -51,7 +61,7 @@ services:
 构建会优先使用仓库 `Version/` 中的固定二进制包；仅当目标版本和架构的 ZIP 不存在时，才从 Snell 官方 HTTPS 地址下载：
 
 ```bash
-docker build \
+docker build --pull \
   --build-arg SNELL_VERSION=v5.0.1 \
   -t snell:v5.0.1 .
 ```
@@ -139,6 +149,8 @@ environment:
 
 不建议通过第三方源在 Alpine 上额外安装 glibc 来强行运行官方二进制；请使用 Docker，或改用 Debian、Ubuntu、Rocky Linux 等 glibc 发行版。
 
+上述限制针对 Alpine **宿主机的原生安装**。本仓库 Docker 镜像自带 glibc/C++ 运行库，因此容器使用 Alpine 不改变安装器的原生安装限制和 Docker 回退策略。
+
 ## 安装脚本
 
 普通用户直接运行进入 TUI：
@@ -170,6 +182,12 @@ Agent 可以省略配置文件，直接通过参数或标准输入提供配置�
 ## 镜像仓库
 
 完整版本标签每次构建正常发布。构建并验证镜像后，工作流重新查询官方发布页：只有构建版本等于官方最新版时才更新 `latest`，手动构建旧版本不会覆盖它。主版本标签（如 `v6`）仅由该系列最新版更新。版本比较包含官方预发布版本，同一版本的正式版高于 `rc`、`beta`；官方版本查询失败时保留所有滚动标签并报告失败。
+
+发布工作流在推送完整版本镜像后，以本次构建输出的 digest 定位注册表中的每个平台制品，验证 Alpine/运行库来源、版本、非 root、启动、配置和正常停止；amd64 的 v3-v5 额外做普通/HTTP 混淆的 TCP、IPv6、UDP 与受支持的自定义 DNS 转发检查。任何校验失败都阻止更新 `latest`、主版本滚动标签和成功构建记录；已推送的完整版本标签不自动回滚。
+
+手动工作流 **Test Alpine with glibc** 使用正式 `Dockerfile` 验证四个系列的代表版本及可用架构，不推送镜像。运行测试均交给 GitHub Actions，本次迁移修改不再进行本地构建或测试。
+
+本轮不将 v3 TLS、v5 QUIC、v6 端到端转发、长期稳定性和性能作为验收门禁；这些项目属于测试延期，不是功能缺失。
 
 ```bash
 # GHCR
@@ -214,7 +232,7 @@ dns = 8.8.8.8, 1.1.1.1
 
 - 未设置 `PSK` 时，随机密钥会显示在日志中，方便通过 `docker logs snell` 查看
 - 多端口监听需要 v6+，低版本只使用第一个端口
-- 如需桥接模式，请移除 `--network host` 并添加端口映射 `-p 20000:20000`
+- 如需桥接模式，请移除 `--network host`，同时映射 TCP 和 UDP：`-p 20000:20000/tcp -p 20000:20000/udp`；安装器生成的 Compose 也保留这两种映射，避免阻断 v5 QUIC 的 UDP 入口。
 - 容器重启不会改变 `.env` 和 Compose 中的固定配置；修改配置或版本时会删除旧容器并按新配置重建。
 - v6+ 冲突时提供 30 秒交互选择：重新提交无冲突参数，或按 `DNS_IP_PREFERENCE` 自动处理；超时默认自动处理
 - v3/v4/v5 可通过 `IPV6=true/false` 控制是否启用 IPv6

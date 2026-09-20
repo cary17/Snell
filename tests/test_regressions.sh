@@ -9,6 +9,14 @@ SNELL_SOURCE_ONLY=1 source "$root/Snell.sh"
 [[ "$(printf '%s\n' 6.0.0rc2 6.0.0 6.0.0rc10 6.0.0b4 | sort_snell_versions)" == $'6.0.0b4\n6.0.0rc2\n6.0.0rc10\n6.0.0' ]]
 [[ "$(printf '%s\n' 6.0.0 6.0.0-rc1 | sort_snell_versions | tail -n 1)" == 6.0.0 ]]
 
+# Bridge networking must retain UDP for Snell v5 QUIC, not only TCP.
+bridge_compose=$(render_compose ghcr.io/fixture/snell:v5.0.1 bridge 32000)
+grep -Fxq '      - "${LISTEN}:${LISTEN}/tcp"' <<< "$bridge_compose"
+grep -Fxq '      - "${LISTEN}:${LISTEN}/udp"' <<< "$bridge_compose"
+host_compose=$(render_compose ghcr.io/fixture/snell:v5.0.1 host 32000)
+grep -Fxq '    network_mode: host' <<< "$host_compose"
+if grep -q '^    ports:' <<< "$host_compose"; then exit 1; fi
+
 # Management commands must never execute when an unsupported dry-run is requested.
 for action in update uninstall start stop restart; do
     (
