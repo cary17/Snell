@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-INPUT_VERSION="${1}"
+INPUT_VERSION="${1:-}"
 if [ -z "$INPUT_VERSION" ]; then
     echo "❌ 错误: 请指定版本号"
     echo ""

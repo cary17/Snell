@@ -1,15 +1,13 @@
 #!/bin/sh
 
-# ============================================================
-# Signal handling
-# ============================================================
+# Snell v5 ignores Docker SIGTERM as PID 1; keep a forwarding parent and reap it.
 cleanup() {
     if [ -n "${SNELL_PID:-}" ]; then
         kill -TERM "$SNELL_PID" 2>/dev/null || true
+        wait "$SNELL_PID" 2>/dev/null || true
     fi
     exit 143
 }
-trap cleanup TERM INT
 
 # ============================================================
 # Random generation
@@ -184,35 +182,8 @@ get_dns_ip_preference() {
 # Snell version helpers
 # ============================================================
 
-get_snell_version() {
-    cat /snell/snell-version 2>/dev/null || echo "unknown"
-}
-
 get_major_version() {
     cat /snell/snell-major-version 2>/dev/null || echo "0"
-}
-
-supports_mode() {
-    major=$(get_major_version)
-    [ "$major" -ge 6 ] 2>/dev/null
-}
-
-is_v6_or_higher() {
-    major=$(get_major_version)
-    [ "$major" -ge 6 ] 2>/dev/null
-}
-
-supports_dns() {
-    major=$(get_major_version)
-    full_version=$(get_snell_version)
-    version_without_v=${full_version#v}
-    minor=${version_without_v#*.}
-    minor=${minor%%.*}
-    
-    # DNS is supported from v4.1.
-    [ "$major" -gt 4 ] 2>/dev/null && return 0
-    [ "$major" -eq 4 ] 2>/dev/null && [ "$minor" -ge 1 ] 2>/dev/null && return 0
-    return 1
 }
 
 ipv6_from_dns_preference() {
@@ -258,33 +229,54 @@ prepare_ipv6_configuration() {
 # ============================================================
 
 validate_listen_input() {
-    input=$1
-    min_port=${2:-10000}
-    max_port=${3:-65535}
-    OLD_IFS=$IFS
-    IFS=','
-    for item in $input; do
-        IFS=$OLD_IFS
-        endpoint=$(printf '%s' "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        [ -n "$endpoint" ] || return 1
-        case "$endpoint" in
-            *[!0-9]*)
-                if printf '%s' "$endpoint" | grep -Eq '^\[[0-9A-Fa-f:]+\]:[0-9]+$'; then
-                    port=${endpoint##*:}
-                elif printf '%s' "$endpoint" | grep -Eq '^:::[0-9]+$'; then
-                    port=${endpoint##*:}
-                elif printf '%s' "$endpoint" | grep -Eq '^[0-9]+(\.[0-9]+){3}:[0-9]+$'; then
-                    port=${endpoint##*:}
-                else
-                    return 1
-                fi
-                ;;
-            *) port=$endpoint ;;
-        esac
-        [ "$port" -ge "$min_port" ] 2>/dev/null && [ "$port" -le "$max_port" ] 2>/dev/null || return 1
-        IFS=','
-    done
-    IFS=$OLD_IFS
+    case "$1" in *'
+'*) return 1 ;; esac
+    printf '%s\n' "$1" | awk -v min="${2:-10000}" -v max="${3:-65535}" '
+        function ipv4(address, parts, n, i) {
+            n = split(address, parts, ".")
+            if (n != 4) return 0
+            for (i = 1; i <= n; i++)
+                if (parts[i] !~ /^[0-9]+$/ || length(parts[i]) > 3 || parts[i] + 0 > 255) return 0
+            return 1
+        }
+        function ipv6(address, parts, n, i, count, compressed, copy) {
+            if (address !~ /^[0-9A-Fa-f:]+$/ || address ~ /:::/) return 0
+            copy = address
+            compressed = gsub(/::/, "", copy)
+            if (compressed > 1) return 0
+            if (!compressed && (address ~ /^:/ || address ~ /:$/)) return 0
+            if (address ~ /^:[^:]/ || address ~ /[^:]:$/) return 0
+            n = split(address, parts, ":")
+            count = 0
+            for (i = 1; i <= n; i++) {
+                if (length(parts[i]) > 4) return 0
+                if (parts[i] != "") count++
+            }
+            return compressed ? count < 8 : count == 8
+        }
+        {
+            n = split($0, endpoints, ",")
+            for (i = 1; i <= n; i++) {
+                endpoint = endpoints[i]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", endpoint)
+                port = endpoint
+                if (endpoint ~ /^\[.*\]:[0-9]+$/) {
+                    address = endpoint
+                    sub(/^\[/, "", address); sub(/\]:[0-9]+$/, "", address)
+                    if (!ipv6(address)) exit 1
+                    sub(/^.*:/, "", port)
+                } else if (endpoint ~ /^:::[0-9]+$/) {
+                    sub(/^:::/, "", port)
+                } else if (endpoint ~ /^[0-9.]+:[0-9]+$/) {
+                    address = endpoint; sub(/:[0-9]+$/, "", address)
+                    if (!ipv4(address)) exit 1
+                    sub(/^.*:/, "", port)
+                }
+                if (port !~ /^[0-9]+$/ || port + 0 < min || port + 0 > max) exit 1
+            }
+            if (!n) exit 1
+        }
+    '
 }
 
 parse_listen() {
@@ -303,29 +295,20 @@ parse_listen() {
         return
     fi
     
-    if echo "$input" | grep -q ':'; then
-        printf "%s" "$input"
-        return
-    fi
-    
-    if [ "$major" -ge 6 ] 2>/dev/null; then
-        result=""
-        OLD_IFS="$IFS"
-        IFS=','
-        for item in $input; do
-            IFS="$OLD_IFS"
-            port=$(printf "%s" "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            if [ -n "$port" ]; then
-                result="${result:+${result}, }0.0.0.0:${port}, [::]:${port}"
-            fi
-            IFS=','
-        done
-        IFS="$OLD_IFS"
-        printf "%s" "$result"
-    else
-        first_port=$(printf "%s" "$input" | cut -d, -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        printf ":::%s" "$first_port"
-    fi
+    printf '%s\n' "$input" | awk -v major="$major" '
+        {
+            n = split($0, endpoints, ",")
+            for (i = 1; i <= n; i++) {
+                endpoint = endpoints[i]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", endpoint)
+                if (i > 1) printf ", "
+                if (index(endpoint, ":")) printf "%s", endpoint
+                else if (major >= 6) printf "0.0.0.0:%s, [::]:%s", endpoint, endpoint
+                else printf ":::%s", endpoint
+                if (major < 6) break
+            }
+        }
+    '
 }
 
 show_config() {
@@ -337,10 +320,6 @@ get_config_meta() {
     field=$2
     item_key=$(printf '%s\n' "$item" | tr '-' '_')
     eval "printf '%s\n' \"\${CONFIG_${item_key}_${field}:-}\""
-}
-
-env_to_key() {
-    printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | tr '_' '-'
 }
 
 is_allowed_value() {
@@ -536,7 +515,7 @@ main() {
 
     if [ ! -f "$CONFIG_FILE" ]; then
         echo "No existing config, creating new configuration..."
-        temp_config=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+        temp_config=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX") || exit 1
         if ! {
             echo "[snell-server]"
             write_config_items
@@ -544,7 +523,7 @@ main() {
             rm -f "$temp_config"
             exit 1
         fi
-        mv -f "$temp_config" "$CONFIG_FILE"
+        mv -f "$temp_config" "$CONFIG_FILE" || { rm -f "$temp_config"; exit 1; }
 
         # Show generated configuration.
         echo "----------------------------------------"
@@ -560,20 +539,21 @@ main() {
         echo "----------------------------------------"
     fi
 
-    CMD="./snell-server -c $CONFIG_FILE"
-    if [ -n "$LOGLEVEL" ]; then
+    set -- ./snell-server -c "$CONFIG_FILE"
+    if [ -n "${LOGLEVEL:-}" ]; then
         if validate_loglevel "$LOGLEVEL" 2>/dev/null; then
             echo "Using log level: $LOGLEVEL"
-            CMD="$CMD -l $LOGLEVEL"
+            set -- "$@" -l "$LOGLEVEL"
         else
             echo "Ignoring unsupported LOGLEVEL: $LOGLEVEL (supported: trace, verbose, info, notify, warning, error)" >&2
         fi
     fi
 
     echo "Starting snell-server..."
-    $CMD &
+    trap cleanup TERM INT
+    "$@" &
     SNELL_PID=$!
-    wait $SNELL_PID
+    wait "$SNELL_PID"
 }
 
 if [ "${SNELL_ENTRYPOINT_TEST_MODE:-0}" != "1" ]; then
