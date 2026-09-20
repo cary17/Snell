@@ -1,16 +1,16 @@
 ARG BASE_TAG=stable-slim
 FROM debian:${BASE_TAG} AS builder
 
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl unzip && \
+    rm -rf /var/lib/apt/lists/*
+
 ARG TARGETARCH
 ARG SNELL_VERSION
 
 COPY snell-config.yml /tmp/snell-config.yml
 COPY scripts/generate-config-items.awk /tmp/generate-config-items.awk
 COPY Version /tmp/Version
-
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl unzip && \
-    rm -rf /var/lib/apt/lists/*
 
 RUN set -ex && \
     [ -n "${SNELL_VERSION}" ] || { echo "SNELL_VERSION build arg is required" >&2; exit 1; } && \
@@ -44,10 +44,6 @@ RUN set -ex && \
 
 FROM debian:${BASE_TAG}
 
-COPY --from=builder /tmp/snell-version /snell-version
-COPY --from=builder /tmp/snell-major-version /snell-major-version
-COPY --from=builder /tmp/snell-archive-sha256 /snell-archive-sha256
-
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -56,6 +52,10 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+
+COPY --from=builder /tmp/snell-version /snell-version
+COPY --from=builder /tmp/snell-major-version /snell-major-version
+COPY --from=builder /tmp/snell-archive-sha256 /snell-archive-sha256
 
 WORKDIR /snell
 COPY --from=builder /tmp/snell-server .

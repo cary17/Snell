@@ -44,11 +44,16 @@ jobs:
           sudo apt-get install -y shellcheck
           bash tests/test_snell.sh
           bash Snell.sh --self-test
-          bash -n Snell.sh tests/test_snell.sh download-snell.sh
+          for script in Snell.sh download-snell.sh tests/*.sh scripts/*.sh; do bash -n "$script"; done
           sh -n entrypoint.sh
-          shellcheck -S warning Snell.sh entrypoint.sh tests/test_snell.sh download-snell.sh
+          shellcheck -S warning Snell.sh entrypoint.sh tests/*.sh download-snell.sh scripts/*.sh
           docker compose config -q
           while IFS= read -r archive; do unzip -tq "$archive" >/dev/null; done < <(find Version -type f -name '*.zip' -print)
+
+      - name: Verify container startup and graceful shutdown
+        run: |
+          docker build --build-arg SNELL_VERSION=v5.0.1 -t snell-test:local .
+          SNELL_TEST_IMAGE=snell-test:local bash tests/test_container.sh
 
   check-version:
     runs-on: ubuntu-latest
@@ -58,7 +63,6 @@ jobs:
       should_build: ${{ steps.decide.outputs.should_build }}
       debian_tag: ${{ steps.debian.outputs.tag }}
       platforms: ${{ steps.platforms.outputs.list }}
-      is_force: ${{ steps.decide.outputs.is_force }}
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -76,23 +80,14 @@ jobs:
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
+          SNELL_SOURCE_ONLY=1 source ./Snell.sh
           if [ -n "$INPUT_VERSION" ]; then
             [[ "$INPUT_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9._-]*$ ]] || { echo "Invalid Snell version" >&2; exit 1; }
             V_INPUT="$INPUT_VERSION"
             VERSION="v${V_INPUT#v}"
           else
-            # 尝试从官网获取最新版本
-            for _ in {1..5}; do
-              VERSION=$(curl -fsSL https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell \
-                | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z]+[0-9]*)?' \
-                | sort -V | tail -n1)
-              if [ -n "$VERSION" ]; then
-                break
-              fi
-              sleep 10
-            done
-            [ -z "$VERSION" ] && exit 1
-            VERSION="v$VERSION"
+            versions=$(get_official_versions) || { echo "Official version lookup failed" >&2; exit 1; }
+            VERSION="v$(tail -n 1 <<< "$versions")"
           fi
           
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -176,15 +171,12 @@ jobs:
           # 判断是否需要构建
           if [ "$FORCE_BUILD" = "true" ]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "is_force=true" >> "$GITHUB_OUTPUT"
             echo "Force build enabled"
           elif [ "$VERSION_EXISTS" = "false" ]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "is_force=false" >> "$GITHUB_OUTPUT"
             echo "New version available: $OFFICIAL"
           else
             echo "should_build=false" >> "$GITHUB_OUTPUT"
-            echo "is_force=false" >> "$GITHUB_OUTPUT"
             echo "Version $OFFICIAL already built, skipping"
           fi
 
@@ -246,7 +238,7 @@ jobs:
             echo "仓库 $USER/$REPO_NAME 已存在"
           fi
 
-      - name: 构建并推送镜像（禁用缓存）
+      - name: 构建并推送完整版本镜像
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
@@ -259,14 +251,10 @@ jobs:
 
           tags: |
             ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/snell:latest
-            ghcr.io/${{ github.repository_owner }}/snell:v${{ needs.check-version.outputs.major_version }}
-            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
-            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:latest', env.DOCKER_HUB_USERNAME) || '' }}
-            ${{ env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:v{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.major_version) || '' }}
-          # 禁用缓存
-          cache-from: type=local,src=/dev/null
-          no-cache: true
+            ${{ env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
+          pull: true
+          cache-from: type=gha,scope=snell-${{ needs.check-version.outputs.major_version }}
+          cache-to: type=gha,mode=max,scope=snell-${{ needs.check-version.outputs.major_version }}
 
       - name: 镜像信息输出
         env:
@@ -285,12 +273,8 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "拉取镜像:"
           echo "docker pull ghcr.io/$GHCR_OWNER/snell:$VERSION"
-          echo "docker pull ghcr.io/$GHCR_OWNER/snell:latest"
-          echo "docker pull ghcr.io/$GHCR_OWNER/snell:v$MAJOR_VERSION"
-          if [ -n "$DOCKER_HUB_USERNAME" ]; then
+          if [ -n "$DOCKER_HUB_TOKEN" ] && [ -n "$DOCKER_HUB_USERNAME" ]; then
             echo "docker pull $DOCKER_HUB_USERNAME/snell:$VERSION"
-            echo "docker pull $DOCKER_HUB_USERNAME/snell:latest"
-            echo "docker pull $DOCKER_HUB_USERNAME/snell:v$MAJOR_VERSION"
           fi
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -340,12 +324,20 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-          if [ -n "$DOCKER_HUB_USERNAME" ]; then
+          if [ -n "$DOCKER_HUB_TOKEN" ] && [ -n "$DOCKER_HUB_USERNAME" ]; then
             docker_image="$DOCKER_HUB_USERNAME/snell:$VERSION"
             docker_digest=$(docker buildx imagetools inspect "$docker_image" --format '{{.Manifest.Digest}}')
             [[ "$docker_digest" == "$ghcr_digest" ]] || { echo "Registry digest mismatch: GHCR=$ghcr_digest DockerHub=$docker_digest" >&2; exit 1; }
             echo "dockerhub_digest=$docker_digest" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: 按官方版本更新滚动标签
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+          IMAGE_DIGEST: ${{ steps.verify-images.outputs.ghcr_digest }}
+          GHCR_OWNER: ${{ github.repository_owner }}
+          DOCKER_HUB_USERNAME: ${{ env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME || '' }}
+        run: bash scripts/publish-tags.sh
 
       - name: 记录已构建版本
         env:

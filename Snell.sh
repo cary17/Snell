@@ -266,21 +266,35 @@ version_supports_v6_options() {
     ((major >= 6))
 }
 
+sort_snell_versions() {
+    # GNU version sort puts ~ prereleases before the corresponding final release.
+    sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+)([^0-9].*)$/\1~\2/' | LC_ALL=C sort -Vu | tr -d '~'
+}
+
+get_official_versions() {
+    local body versions attempt
+    for attempt in 1 2 3; do
+        if body=$(curl -fsSL --connect-timeout 10 --max-time 30 "$RELEASE_NOTES_URL") &&
+            versions=$(printf '%s' "$body" | grep -Eo 'snell-server-v[0-9]+\.[0-9]+\.[0-9]+[[:alnum:]._-]*-linux-' \
+                | sed -E 's/^snell-server-v//; s/-linux-$//' | sort_snell_versions) && [[ -n "$versions" ]]; then
+            printf '%s\n' "$versions"
+            return 0
+        fi
+        [[ "$attempt" == 3 ]] || sleep 2
+    done
+    return 1
+}
+
 get_latest_version() {
     local body version
-    body=$(curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 "$RELEASE_NOTES_URL" 2>/dev/null || true)
-    version=$(printf '%s' "$body" \
-        | grep -Eo 'snell-server-v[0-9]+\.[0-9]+\.[0-9]+[[:alnum:]._-]*' \
-        | sed 's/.*-v//' \
-        | sort -V \
-        | tail -n 1 || true)
+    version=$(get_official_versions 2>/dev/null | tail -n 1 || true)
     if [[ -z "$version" ]]; then
         body=$(curl -fsSL --connect-timeout 10 --max-time 30 --retry 2 \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/Version" 2>/dev/null || true)
         version=$(printf '%s' "$body" \
             | grep -Eo '"name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+[[:alnum:]._-]*"' \
             | sed -E 's/.*"(v[^" ]+)"/\1/; s/^v//' \
-            | sort -V \
+            | sort_snell_versions \
             | tail -n 1 || true)
     fi
     [[ -n "$version" ]] && printf '%s\n' "$version"
@@ -335,6 +349,7 @@ ensure_native_dependencies() {
     command_exists curl || missing+=(curl)
     command_exists unzip || missing+=(unzip)
     command_exists ip || missing+=(ip)
+    command_exists ss || missing+=(ss)
     command_exists openssl || missing+=(openssl)
     command_exists pgrep || missing+=(pgrep)
     if ((${#missing[@]} == 0)); then
@@ -349,7 +364,7 @@ ensure_native_dependencies() {
         apk) install_packages "$pm" ca-certificates curl unzip iproute2 openssl procps ;;
         *) error "缺少依赖 (${missing[*]})，且无法识别包管理器。"; return 1 ;;
     esac
-    for command_name in curl unzip ip openssl pgrep; do
+    for command_name in curl unzip ip ss openssl pgrep; do
         command_exists "$command_name" || { error "依赖安装后仍缺少: $command_name"; return 1; }
     done
 }
@@ -367,10 +382,40 @@ port_in_use() {
     fi
 }
 
+native_listens_on_port() {
+    local port="$1" pid
+    if systemd_usable; then
+        systemctl is-active --quiet snell || return 1
+        pid=$(systemctl show --property MainPID --value snell) || return 1
+    elif openrc_usable; then
+        rc-service snell status >/dev/null 2>&1 || return 1
+        pid=$(cat /run/snell.pid 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    ss -H -ltnp "sport = :$port" 2>/dev/null | grep -F "pid=$pid," >/dev/null
+}
+
+check_config_port() {
+    local method="$1" port="$2" current
+    port_in_use "$port" || return 0
+    if [[ "$method" == native ]] && has_native_install; then
+        native_listens_on_port "$port" && return 0
+    elif [[ "$method" == docker ]] && has_docker_install; then
+        current=$(dotenv_value LISTEN "$DOCKER_ENV_FILE")
+        if [[ "$port" == "$current" && "$(docker inspect --format '{{.State.Running}}' snell 2>/dev/null)" == true ]]; then
+            return 0
+        fi
+    fi
+    error "端口 $port 已被其他服务占用。"
+    return 1
+}
+
 wait_for_native() {
     local port="$1" attempts=30
     while ((attempts > 0)); do
-        if port_in_use "$port"; then
+        if native_listens_on_port "$port"; then
             return 0
         fi
         sleep 1
@@ -663,6 +708,8 @@ AI agent 使用配置文件：
 
 只检查不执行：
   ... --agent-install ... --dry-run
+  ... --agent-reconfigure --yes ... --dry-run
+  --dry-run 仅支持安装和重配置；其他操作带此参数时退出且不执行操作。
 
 管理命令：
   bash Snell.sh --agent-config
@@ -837,6 +884,7 @@ collect_config() {
         cfg_mode="$CLI_MODE"
         cfg_loglevel="$CLI_LOGLEVEL"
         validate_agent_config || return 1
+        check_config_port "$method" "$cfg_port" || return 1
         resolve_v6_conflict || return 1
         return 0
     fi
@@ -847,7 +895,7 @@ collect_config() {
         if [[ "$value" =~ ^[0-9]+$ ]]; then
             numeric=$((10#$value))
             if ((numeric >= 10000 && numeric <= 65535)); then
-                if port_in_use "$numeric"; then
+                if ! check_config_port "$method" "$numeric"; then
                     warn "端口 $numeric 已被占用。"
                 else
                     cfg_port="$numeric"
@@ -1740,13 +1788,9 @@ agent_reconfigure() {
     CLI_NETWORK="$cfg_network"
     ((CLI_SET_PORT)) || CLI_PORT="$cfg_default_port"
     ((CLI_SET_PSK)) || CLI_PSK="$cfg_default_psk"
-    if ((CLI_SET_IPV6 == 0)); then
-        if version_supports_v6_options "$cfg_effective_version"; then CLI_IPV6="$cfg_default_ipv6"; else CLI_IPV6="${cfg_default_ipv6:-false}"; fi
-    fi
+    ((CLI_SET_IPV6)) || CLI_IPV6="$cfg_default_ipv6"
     ((CLI_SET_DNS)) || CLI_DNS="$cfg_default_dns"
-    if ((CLI_SET_DNS_PREF == 0)); then
-        if version_supports_v6_options "$cfg_effective_version"; then CLI_DNS_PREF="${cfg_default_pref:-prefer-ipv4}"; else CLI_DNS_PREF="$cfg_default_pref"; fi
-    fi
+    ((CLI_SET_DNS_PREF)) || CLI_DNS_PREF="$cfg_default_pref"
     ((CLI_SET_EGRESS)) || CLI_EGRESS="$cfg_default_egress"
     ((CLI_SET_OBFS)) || CLI_OBFS="${cfg_default_obfs:-none}"
     ((CLI_SET_HOST)) || CLI_HOST="$cfg_default_host"
@@ -1944,6 +1988,12 @@ parse_agent_args() {
 
 agent_main() {
     parse_agent_args "$@" || return $?
+    if ((CLI_DRY_RUN)); then
+        case "$CLI_ACTION" in
+            install|reconfigure) ;;
+            *) error "--dry-run 仅支持 install 和 reconfigure；未执行任何操作。"; return 2 ;;
+        esac
+    fi
     if [[ "$CLI_ACTION" != install && "$CLI_ACTION" != config && "$CLI_ACTION" != status && "$CLI_YES" != 1 ]]; then
         error "此 agent 操作需要显式提供 --yes。"
         return 2

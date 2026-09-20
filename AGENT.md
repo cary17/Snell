@@ -40,6 +40,7 @@ The examples below use `v5.0.1`; replace it with a supported version after check
 
 1. Run `--dry-run` before any real install or reconfiguration.
 2. `--dry-run` only validates and prints generated files. It does not pull images, write `/etc/snell`, write `/opt/snell`, start services, stop services, create containers, or remove containers.
+   It is supported only for install and reconfigure. Other actions with `--dry-run` fail before executing the action.
 3. Real installation and service operations require root.
 4. `PSK` is a secret. Prefer `--config-stdin` or a temporary mode-600 config file over putting it in shell history.
 5. `--yes` is required for agent operations that can change an existing installation: reconfigure, update, and uninstall. `--agent-uninstall --yes` is destructive.

@@ -68,7 +68,7 @@ grep -Fq 'Agent 安装信息:' <<< "$agent_result_output"
 grep -Fq '安装方式: Docker' <<< "$agent_result_output"
 grep -Fq '持久化配置: /opt/snell/.env' <<< "$agent_result_output"
 source_output=$(SNELL_SOURCE_ONLY=1 bash -c 'source "$1"; cfg_port=32000; cfg_psk=AgentTestPsk16._-abcdef; cfg_ipv6=false; cfg_dns=""; cfg_dns_pref=""; cfg_egress=""; cfg_obfs=""; cfg_host=""; cfg_mode=""; cfg_loglevel=trace; render_snell_config v5.0.1 32000 AgentTestPsk16._-abcdef false "" "" "" "" "" "" "" trace' _ "$root/Snell.sh")
-! grep -Fq '^log =' <<< "$source_output"
+! grep -q '^log =' <<< "$source_output"
 grep -Fq -- '-l trace' <<< "$(SNELL_SOURCE_ONLY=1 bash -c 'source "$1"; cfg_loglevel=trace; render_native_command' _ "$root/Snell.sh")"
 default_command=$(SNELL_SOURCE_ONLY=1 bash -c 'source "$1"; cfg_loglevel=""; render_native_command' _ "$root/Snell.sh")
 grep -Fqx '/usr/local/bin/snell-server -c /etc/snell/snell.conf' <<< "$default_command"
@@ -76,7 +76,7 @@ grep -Fqx '/usr/local/bin/snell-server -c /etc/snell/snell.conf' <<< "$default_c
 docker_output=$(SNELL_SOURCE_ONLY=1 bash -c 'source "$1"; render_env_file 32000 AgentTestPsk16._-abcdef "" "" "" "" "" "" "" trace' _ "$root/Snell.sh")
 grep -Fqx 'LOGLEVEL=trace' <<< "$docker_output"
 default_docker_output=$(SNELL_SOURCE_ONLY=1 bash -c 'source "$1"; render_env_file 32000 AgentTestPsk16._-abcdef "" "" "" "" "" "" "" ""' _ "$root/Snell.sh")
-! grep -Fq '^LOGLEVEL=' <<< "$default_docker_output"
+! grep -q '^LOGLEVEL=' <<< "$default_docker_output"
 config_items=$(mktemp)
 awk -v sn_version=v6.0.0rc2 -f "$root/scripts/generate-config-items.awk" "$root/snell-config.yml" > "$config_items"
 for preference in prefer-ipv4 prefer-ipv6 ipv4-only ipv6-only; do
@@ -263,9 +263,9 @@ printf '%s\n' \
     'https://dl.nssurge.com/snell/snell-server-v6.0.0rc2-linux-amd64.zip' \
     'https://dl.nssurge.com/snell/snell-server-v6.0.0rc10-linux-amd64.zip' \
     'https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip' > "$version_fixture"
-grep -Fq "grep -oP 'snell-server-v\\K[0-9]+\\.[0-9]+\\.[0-9]+(?:[a-z]+[0-9]*)?'" "$root/.github/workflows/build.yml"
-version_output=$(grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+(?:[a-z]+[0-9]*)?' "$version_fixture" | sort -Vu)
+version_output=$(SNELL_SOURCE_ONLY=1 bash -c 'source "$1"; fixture=$2; curl(){ cat "$fixture"; }; get_official_versions' _ "$root/Snell.sh" "$version_fixture")
 expected_versions=$'5.0.1\n6.0.0b4\n6.0.0rc\n6.0.0rc2\n6.0.0rc10'
 [[ "$version_output" == "$expected_versions" ]]
 if grep -Fqx '6.0.0r' <<< "$version_output"; then exit 1; fi
+bash "$root/tests/test_regressions.sh"
 printf 'test_snell.sh: passed\n'
