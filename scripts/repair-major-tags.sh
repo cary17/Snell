@@ -20,6 +20,7 @@ declare -A versions_by_major
 for record in "$root"/.build-records/v*.txt; do
     [ -f "$record" ] || continue
     version=$(awk -F= '$1 == "version" {print $2}' "$record")
+    record_digest=$(awk -F= '$1 == "image_digest" {print $2}' "$record")
     is_exact_version "$version" || { error "Invalid version in $record."; exit 1; }
     major=${version#v}; major=${major%%.*}
     [[ -z "${MAJOR:-}" || "$MAJOR" == "$major" ]] || continue
@@ -40,12 +41,22 @@ ghcr_repo="ghcr.io/$GHCR_OWNER/snell"
 dockerhub_repo=""
 [[ -z "${DOCKER_HUB_USERNAME:-}" ]] || dockerhub_repo="docker.io/$DOCKER_HUB_USERNAME/snell"
 while IFS=$'\t' read -r major version; do
-    ghcr_digest=$(docker buildx imagetools inspect "$ghcr_repo:$version" --format '{{.Manifest.Digest}}') || {
-        error "Published GHCR image is unavailable for $version."; exit 1;
+    record="$root/.build-records/$version.txt"
+    record_digest=$(awk -F= '$1 == "image_digest" {print $2}' "$record")
+    [[ "$record_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { error "Invalid recorded digest for $version."; exit 1; }
+    resolve_digest() {
+        local repository=$1 resolved=""
+        resolved=$(docker buildx imagetools inspect "$repository@$record_digest" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+        if [[ "$resolved" == "$record_digest" ]]; then
+            printf '%s\n' "$resolved"; return 0
+        fi
+        resolved=$(docker buildx imagetools inspect "$repository:$version" --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+        [[ "$resolved" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+        printf '%s\n' "$resolved"
     }
-    [[ "$ghcr_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { error "Invalid GHCR digest for $version."; exit 1; }
+    ghcr_digest=$(resolve_digest "$ghcr_repo") || { error "Published GHCR image is unavailable for $version."; exit 1; }
     if [[ -n "$dockerhub_repo" ]]; then
-        dockerhub_digest=$(docker buildx imagetools inspect "$dockerhub_repo:$version" --format '{{.Manifest.Digest}}') || {
+        dockerhub_digest=$(resolve_digest "$dockerhub_repo") || {
             error "Published Docker Hub image is unavailable for $version."; exit 1;
         }
         [[ "$dockerhub_digest" == "$ghcr_digest" ]] || { error "Registry digest mismatch for $version."; exit 1; }
