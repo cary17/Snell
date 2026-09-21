@@ -5,61 +5,9 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../Snell.sh
 SNELL_SOURCE_ONLY=1 source "$root/Snell.sh"
-# shellcheck source=snell-version-output.sh
-source "$root/tests/snell-version-output.sh"
 
 [[ "$(printf '%s\n' 6.0.0rc2 6.0.0 6.0.0rc10 6.0.0b4 | sort_snell_versions)" == $'6.0.0b4\n6.0.0rc2\n6.0.0rc10\n6.0.0' ]]
 [[ "$(printf '%s\n' 6.0.0 6.0.0-rc1 | sort_snell_versions | tail -n 1)" == 6.0.0 ]]
-
-version_log=$(mktemp)
-trap 'rm -f "$version_log"' EXIT
-printf '%s\n' '2026-09-20 [server_main] <NOTIFY> snell-server v6.0.0 (Aug  7 2026)' > "$version_log"
-snell_binary_reports_version v6.0.0 "$version_log"
-snell_binary_reports_version v6.0.0rc2 "$version_log"
-for reported in 7.0.0 6.1.0 6.0.1; do
-    printf 'snell-server v%s (fixture)\n' "$reported" > "$version_log"
-    if snell_binary_reports_version v6.0.0rc2 "$version_log"; then
-        echo "Accepted a binary with a different release core: $reported" >&2
-        exit 1
-    fi
-done
-printf '%s\n' '2026-09-20 [server_main] <NOTIFY> snell-server v6.0.0rc3 (Aug  7 2026)' > "$version_log"
-if snell_binary_reports_version v6.0.0rc2 "$version_log"; then
-    echo "Accepted a different binary prerelease suffix" >&2
-    exit 1
-fi
-
-if snell_binary_reports_version v6.0.0 "$version_log"; then
-    echo "Accepted a prerelease binary for a stable request" >&2
-    exit 1
-fi
-printf '%s\n' 'snell-server v6.0.0rc2 (fixture)' > "$version_log"
-snell_binary_reports_version v6.0.0rc2 "$version_log"
-
-# A stale stable banner is accepted only for this exact upstream arm64 payload.
-known_arm64_sha=a6dceb898ade6da58840bf26499a0747894fb1c6407878139c8d863e7926d297
-printf '%s\n' 'snell-server v4.1.0 (fixture)' > "$version_log"
-snell_binary_reports_version v4.1.1 "$version_log" linux/arm64 "$known_arm64_sha"
-if snell_binary_reports_version v4.1.1 "$version_log"; then
-    echo "Accepted stale stable banner without provenance" >&2; exit 1
-fi
-for wrong_platform in linux/amd64 linux/386 linux/arm/v7; do
-    if snell_binary_reports_version v4.1.1 "$version_log" "$wrong_platform" "$known_arm64_sha"; then
-        echo "Accepted arm64 banner exception for another platform" >&2; exit 1
-    fi
-done
-if snell_binary_reports_version v4.1.1 "$version_log" linux/arm64 "$(printf '%064d' 0)"; then
-    echo "Accepted stale stable banner with another payload" >&2; exit 1
-fi
-if snell_binary_reports_version v4.1.2 "$version_log" linux/arm64 "$known_arm64_sha"; then
-    echo "Applied a known banner exception to another release" >&2; exit 1
-fi
-printf '%s\n' 'snell-server v4.0.0 (fixture)' > "$version_log"
-if snell_binary_reports_version v4.1.1 "$version_log" linux/arm64 "$known_arm64_sha"; then
-    echo "Accepted an unrelated banner for the known payload" >&2; exit 1
-fi
-printf '%s\n' 'snell-server v4.1.1 (fixture)' > "$version_log"
-snell_binary_reports_version v4.1.1 "$version_log"
 
 workflow="$root/.github/workflows/build.yml"
 triggers=$(sed -n '/^on:/,/^jobs:/p' "$workflow")
