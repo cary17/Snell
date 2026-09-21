@@ -26,7 +26,9 @@ done
 for directory in "$root"/Version/v*; do
     [ -d "$directory" ] || continue
     value=${directory##*/}; value=${value#v}
-    [[ "$value" == "$major".* ]] && printf '%s\n' "$value"
+    if [[ "$value" == "$major".* ]]; then
+        printf '%s\n' "$value"
+    fi
 done)
 major_latest=$(printf '%s\n' "$known_major_versions" "$version" | sed '/^$/d' | sort_snell_versions | tail -n 1)
 is_exact_version "$major_latest" || { error "No valid known version for major $major."; exit 1; }
