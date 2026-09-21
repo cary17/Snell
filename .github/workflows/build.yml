@@ -1,21 +1,8 @@
 name: Build and Push Snell Docker Image
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - Snell.sh
-      - download-snell.sh
-      - entrypoint.sh
-      - snell-config.yml
-      - scripts/**
-      - tests/**
-      - docker-compose.yml
-      - .github/workflows/build.yml
   schedule:
-    - cron: '0 */8 * * *'
+    - cron: '0 19 * * *' # Daily version detection at 03:00 Asia/Shanghai.
   workflow_dispatch:
     inputs:
       version:
@@ -30,6 +17,8 @@ on:
 
 jobs:
   test:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -149,7 +138,6 @@ jobs:
           OFFICIAL="${{ steps.version.outputs.version }}"
           VERSION_EXISTS="${{ steps.build-record.outputs.version_exists }}"
           FORCE_BUILD="${{ github.event.inputs.force }}"
-          [ "${{ github.event_name }}" = push ] && FORCE_BUILD=true
           
           echo "Official version: $OFFICIAL"
           echo "Version exists in records: $VERSION_EXISTS"
@@ -167,9 +155,26 @@ jobs:
             echo "Version $OFFICIAL already built, skipping"
           fi
 
+      - name: 官方版本检测报告
+        if: github.event_name == 'schedule'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_EXISTS: ${{ steps.build-record.outputs.version_exists }}
+        run: |
+          {
+            echo '## Snell 官方版本检测'
+            echo "官网最新版：$VERSION"
+            if [ "$VERSION_EXISTS" = true ]; then
+              echo '该版本已有成功构建记录，本次不构建。'
+            else
+              echo '检测到未构建的新版本，将自动进入校验、候选构建和发布流程。'
+            fi
+            echo '只有全部校验通过后才更新具体版本、主版本及 latest 标签。'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build-and-push:
     needs: [test, check-version]
-    if: needs.check-version.outputs.should_build == 'true'
+    if: needs.check-version.outputs.should_build == 'true' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

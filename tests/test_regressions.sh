@@ -35,7 +35,44 @@ if snell_binary_reports_version v6.0.0 "$version_log"; then
 fi
 printf '%s\n' 'snell-server v6.0.0rc2 (fixture)' > "$version_log"
 snell_binary_reports_version v6.0.0rc2 "$version_log"
+
+# A stale stable banner is accepted only for this exact upstream arm64 payload.
+known_arm64_sha=a6dceb898ade6da58840bf26499a0747894fb1c6407878139c8d863e7926d297
+printf '%s\n' 'snell-server v4.1.0 (fixture)' > "$version_log"
+snell_binary_reports_version v4.1.1 "$version_log" linux/arm64 "$known_arm64_sha"
+if snell_binary_reports_version v4.1.1 "$version_log"; then
+    echo "Accepted stale stable banner without provenance" >&2; exit 1
+fi
+for wrong_platform in linux/amd64 linux/386 linux/arm/v7; do
+    if snell_binary_reports_version v4.1.1 "$version_log" "$wrong_platform" "$known_arm64_sha"; then
+        echo "Accepted arm64 banner exception for another platform" >&2; exit 1
+    fi
+done
+if snell_binary_reports_version v4.1.1 "$version_log" linux/arm64 "$(printf '%064d' 0)"; then
+    echo "Accepted stale stable banner with another payload" >&2; exit 1
+fi
+if snell_binary_reports_version v4.1.2 "$version_log" linux/arm64 "$known_arm64_sha"; then
+    echo "Applied a known banner exception to another release" >&2; exit 1
+fi
+printf '%s\n' 'snell-server v4.0.0 (fixture)' > "$version_log"
+if snell_binary_reports_version v4.1.1 "$version_log" linux/arm64 "$known_arm64_sha"; then
+    echo "Accepted an unrelated banner for the known payload" >&2; exit 1
+fi
+printf '%s\n' 'snell-server v4.1.1 (fixture)' > "$version_log"
+snell_binary_reports_version v4.1.1 "$version_log"
+
 workflow="$root/.github/workflows/build.yml"
+triggers=$(sed -n '/^on:/,/^jobs:/p' "$workflow")
+grep -Fq '  workflow_dispatch:' <<< "$triggers"
+grep -Fq -- "- cron: '0 19 * * *'" <<< "$triggers"
+if grep -Eq '^  (push|pull_request|workflow_run|workflow_call):' <<< "$triggers"; then
+    echo "Image builds must not be triggered by repository events" >&2; exit 1
+fi
+test_job=$(sed -n '/^  test:/,/^  check-version:/p' "$workflow")
+grep -Fq 'needs: check-version' <<< "$test_job"
+grep -Fq "if: needs.check-version.outputs.should_build == 'true'" <<< "$test_job"
+build_job=$(sed -n '/^  build-and-push:/,$p' "$workflow")
+grep -Fq "if: needs.check-version.outputs.should_build == 'true' && needs.test.result == 'success'" <<< "$build_job"
 candidate_stage=$(sed -n '/- name: 准备候选镜像导出/,/- name: 候选镜像摘要/p' "$workflow")
 grep -Fq 'push-by-digest=true' <<< "$candidate_stage"
 grep -Fq 'name-canonical=true' <<< "$candidate_stage"
