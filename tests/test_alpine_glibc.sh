@@ -2,6 +2,9 @@
 # CI acceptance for one production Dockerfile image (tag or exact manifest digest).
 # v3 TLS, v5 QUIC, v6 forwarding and long-term stability/performance are deferred.
 set -euo pipefail
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=snell-version-output.sh
+source "$root/tests/snell-version-output.sh"
 : "${SNELL_TEST_IMAGE:?Set SNELL_TEST_IMAGE to the production image}"
 platform=${SNELL_TEST_PLATFORM:-linux/amd64}
 results=${SNELL_TEST_RESULTS:-$(mktemp -d /tmp/snell-alpine-results.XXXXXX)}
@@ -73,9 +76,17 @@ start_case() {
 }
 
 # CI verifies this image's single version.
-docker run --rm --platform "$platform" --entrypoint /snell/snell-server \
-    "$SNELL_TEST_IMAGE" --version > "$results/$version-version.log" 2>&1
-grep -Fq "snell-server $version (" "$results/$version-version.log"
+version_log="$results/$version-version.log"
+if ! docker run --rm --platform "$platform" --entrypoint /snell/snell-server \
+    "$SNELL_TEST_IMAGE" --version > "$version_log" 2>&1; then
+    cat "$version_log" >&2
+    exit 1
+fi
+if ! snell_binary_reports_version "$version" "$version_log"; then
+    echo "Unexpected snell-server --version output for requested $version:" >&2
+    cat "$version_log" >&2
+    exit 1
+fi
 start_case baseline
 grep -Fxq 'psk = RegressionOnlyPsk16' "$results/$version-baseline.conf"
 case "$version" in
