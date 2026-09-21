@@ -199,14 +199,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 登录 Docker Hub
-        if: env.DOCKER_HUB_TOKEN != ''
+        if: env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME != ''
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ env.DOCKER_HUB_USERNAME }}
           password: ${{ env.DOCKER_HUB_TOKEN }}
 
       - name: 自动创建 Docker Hub 仓库 (如果不存在)
-        if: env.DOCKER_HUB_TOKEN != ''
+        if: env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME != ''
         run: |
           REPO_NAME="snell"
           USER="$DOCKER_HUB_USERNAME"
@@ -225,43 +225,37 @@ jobs:
             echo "仓库 $USER/$REPO_NAME 已存在"
           fi
 
-      - name: 构建并推送完整版本镜像
+      - name: 准备候选镜像导出
+        id: candidate-export
+        env:
+          GHCR_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          names="ghcr.io/$GHCR_OWNER/snell"
+          if [ -n "$DOCKER_HUB_TOKEN" ] && [ -n "$DOCKER_HUB_USERNAME" ]; then
+            names="$names,docker.io/$DOCKER_HUB_USERNAME/snell"
+          fi
+          printf 'outputs=type=image,"name=%s",push-by-digest=true,name-canonical=true,push=true\n' "$names" >> "$GITHUB_OUTPUT"
+
+      - name: 构建并推送候选镜像
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
-          push: true
           platforms: ${{ needs.check-version.outputs.platforms }}
           build-args: |
             SNELL_VERSION=${{ needs.check-version.outputs.version }}
-
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/snell:${{ needs.check-version.outputs.version }}
-            ${{ env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME != '' && format('{0}/snell:{1}', env.DOCKER_HUB_USERNAME, needs.check-version.outputs.version) || '' }}
+          outputs: ${{ steps.candidate-export.outputs.outputs }}
           pull: true
           cache-from: type=gha,scope=snell-${{ needs.check-version.outputs.major_version }}
           cache-to: type=gha,mode=max,scope=snell-${{ needs.check-version.outputs.major_version }}
 
-      - name: 镜像信息输出
+      - name: 候选镜像摘要
         env:
-          VERSION: ${{ needs.check-version.outputs.version }}
-          MAJOR_VERSION: ${{ needs.check-version.outputs.major_version }}
-          PLATFORMS: ${{ needs.check-version.outputs.platforms }}
-          GHCR_OWNER: ${{ github.repository_owner }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ 镜像构建成功！"
-          echo "版本: $VERSION"
-          echo "主版本: $MAJOR_VERSION"
-          echo "运行镜像: alpine:latest; glibc 来源: debian:bookworm-slim"
-          echo "支持平台: $PLATFORMS"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "拉取镜像:"
-          echo "docker pull ghcr.io/$GHCR_OWNER/snell:$VERSION"
-          if [ -n "$DOCKER_HUB_TOKEN" ] && [ -n "$DOCKER_HUB_USERNAME" ]; then
-            echo "docker pull $DOCKER_HUB_USERNAME/snell:$VERSION"
-          fi
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid build digest" >&2; exit 1; }
+          echo "Candidate image digest: $BUILD_DIGEST"
 
       - name: 验证注册表制品
         id: verify-images
@@ -320,16 +314,16 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           if [ -n "$DOCKER_HUB_TOKEN" ] && [ -n "$DOCKER_HUB_USERNAME" ]; then
-            docker_image="$DOCKER_HUB_USERNAME/snell:$VERSION"
+            docker_image="docker.io/$DOCKER_HUB_USERNAME/snell@$BUILD_DIGEST"
             docker_digest=$(docker buildx imagetools inspect "$docker_image" --format '{{.Manifest.Digest}}')
             [[ "$docker_digest" == "$ghcr_digest" ]] || { echo "Registry digest mismatch: GHCR=$ghcr_digest DockerHub=$docker_digest" >&2; exit 1; }
             echo "dockerhub_digest=$docker_digest" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: 按官方版本更新滚动标签
+      - name: 发布正式版本标签
         env:
           VERSION: ${{ needs.check-version.outputs.version }}
-          IMAGE_DIGEST: ${{ steps.verify-images.outputs.ghcr_digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           GHCR_OWNER: ${{ github.repository_owner }}
           DOCKER_HUB_USERNAME: ${{ env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME || '' }}
         run: bash scripts/publish-tags.sh
@@ -338,7 +332,7 @@ jobs:
         env:
           VERSION: ${{ needs.check-version.outputs.version }}
           PLATFORMS: ${{ needs.check-version.outputs.platforms }}
-          IMAGE_DIGEST: ${{ steps.verify-images.outputs.ghcr_digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           ARCHIVE_DIGESTS: ${{ steps.verify-images.outputs.archive_digests }}
         run: |
           RECORD_FILE=".build-records/${VERSION}.txt"
