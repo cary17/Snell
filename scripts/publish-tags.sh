@@ -18,9 +18,18 @@ major=${version%%.*}
 # Complete every read-only gate before writing any formal tag.
 versions=$(get_official_versions) || { error "Official versions unavailable; formal tags left unchanged."; exit 1; }
 latest=$(tail -n 1 <<< "$versions")
-major_latest=$(awk -F. -v major="$major" '$1 == major' <<< "$versions" | tail -n 1)
 is_exact_version "$latest" || { error "Invalid official latest version."; exit 1; }
-[[ -z "$major_latest" ]] || is_exact_version "$major_latest" || { error "Invalid official major version."; exit 1; }
+known_major_versions=$(for record in "$root"/.build-records/v*.txt; do
+    [ -f "$record" ] || continue
+    awk -F= -v major="$major" '$1 == "version" {value=$2; sub(/^v/, "", value); if (value ~ "^" major "\\.") print value}' "$record"
+done
+for directory in "$root"/Version/v*; do
+    [ -d "$directory" ] || continue
+    value=${directory##*/}; value=${value#v}
+    [[ "$value" == "$major".* ]] && printf '%s\n' "$value"
+done)
+major_latest=$(printf '%s\n' "$known_major_versions" "$version" | sed '/^$/d' | sort_snell_versions | tail -n 1)
+is_exact_version "$major_latest" || { error "No valid known version for major $major."; exit 1; }
 
 ghcr_repo="ghcr.io/$GHCR_OWNER/snell"
 dockerhub_repo=""

@@ -30,6 +30,15 @@ if grep -Eq 'snell:(latest|v[0-9])' <<< "$candidate_stage"; then
     exit 1
 fi
 verify_line=$(grep -n -m1 'name: 验证注册表制品' "$workflow" | cut -d: -f1)
+repair_workflow="$root/.github/workflows/repair-major-tags.yml"
+repair_triggers=$(sed -n '/^on:/,/^permissions:/p' "$repair_workflow")
+grep -Fq '  workflow_dispatch:' <<< "$repair_triggers"
+if grep -Eq '^  (push|pull_request|schedule|workflow_run|workflow_call):' <<< "$repair_triggers"; then
+    echo "Major tag repair must remain manual" >&2; exit 1
+fi
+repair_inspect=$(grep -n -m1 'imagetools inspect' "$root/scripts/repair-major-tags.sh" | cut -d: -f1)
+repair_create=$(grep -n -m1 'imagetools create' "$root/scripts/repair-major-tags.sh" | cut -d: -f1)
+((repair_inspect < repair_create))
 publish_line=$(grep -n -m1 'name: 发布正式版本标签' "$workflow" | cut -d: -f1)
 ((verify_line < publish_line))
 
@@ -163,6 +172,14 @@ done
         : > "$registry_calls"
         VERSION=$1 bash "$root/scripts/publish-tags.sh" >/dev/null
     }
+
+    # v3 is absent from the current official page; records/backups still decide its rolling tag.
+    run_publish v3.0.1
+    [[ "$(write_count)" == 2 ]]
+    assert_tag ghcr.io/fixture/snell:v3.0.1
+    assert_tag ghcr.io/fixture/snell:v3
+    assert_tag docker.io/fixture/snell:v3.0.1
+    assert_tag docker.io/fixture/snell:v3
 
     run_publish v5.0.0
     [[ "$(write_count)" == 2 ]]
