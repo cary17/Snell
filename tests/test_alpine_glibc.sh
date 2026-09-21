@@ -43,6 +43,8 @@ docker run --rm --platform "$platform" --entrypoint sh "$SNELL_TEST_IMAGE" -ec '
     sha256sum /snell/snell-server
 ' _ "$deb_arch" > "$results/runtime.txt"
 cat "$results/runtime.txt"
+binary_sha=$(awk '$2 == "/snell/snell-server" {print $1}' "$results/runtime.txt")
+[[ "$binary_sha" =~ ^[0-9a-f]{64}$ ]]
 
 stop_case() {
     docker logs "$container" > "$results/$version-$case_name.log" 2>&1
@@ -82,7 +84,7 @@ if ! docker run --rm --platform "$platform" --entrypoint /snell/snell-server \
     cat "$version_log" >&2
     exit 1
 fi
-if ! snell_binary_reports_version "$version" "$version_log"; then
+if ! snell_binary_reports_version "$version" "$version_log" "$platform" "$binary_sha"; then
     echo "Unexpected snell-server --version output for requested $version:" >&2
     cat "$version_log" >&2
     exit 1
