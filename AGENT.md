@@ -53,6 +53,8 @@ The examples below use `v5.0.1`; replace it with a supported version after check
 11. The installer does not run global `docker prune`.
 12. A pre-existing container named `snell` that is not managed by this installer is not adopted or migrated; the operation fails and leaves it untouched.
 
+If a native update or a reinstall over an existing native installation fails, the installer restores the previous binary and preserves the previous version record. This does not guarantee a complete transactional rollback of configuration.
+
 ## 2. Supported Versions
 
 The repository currently records these versions:
@@ -72,6 +74,8 @@ The repository currently records these versions:
 | `v6.0.0rc` | v6 release candidate | yes on glibc Linux | yes | LISTEN, PSK, IPV6 (explicit/derived), DNS, DNS_IP_PREFERENCE, EGRESS_INTERFACE, MODE |
 
 `latest` and major Docker tags such as `v6` are valid for Docker only. Native installation requires a complete version such as `v5.0.1`.
+
+Successful native installation records the exact archive version in `/var/lib/snell/native-version`. Version identification and update logic prefer this record over the binary banner, which may lag behind the archive version. Older installations without a record fall back to parsing the banner; if no version can be parsed, version identification returns failure.
 
 Native installation means the official release binary. It requires a glibc-based Linux environment. Alpine/musl cannot execute the official native binary reliably.
 
