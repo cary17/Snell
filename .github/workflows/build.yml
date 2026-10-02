@@ -331,7 +331,11 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           GHCR_OWNER: ${{ github.repository_owner }}
           DOCKER_HUB_USERNAME: ${{ env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME || '' }}
-        run: bash scripts/publish-tags.sh
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$DEFAULT_BRANCH"
+          SNELL_PUBLISHED_STATE_REF=FETCH_HEAD bash scripts/publish-tags.sh
 
       - name: 记录已构建版本
         env:
