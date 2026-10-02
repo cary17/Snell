@@ -15,6 +15,7 @@ readonly SNELL_USER="snell"
 readonly SNELL_GROUP="snell"
 readonly STATE_DIR="/var/lib/snell"
 readonly STATE_FILE="${STATE_DIR}/install-mode"
+readonly SNELL_VERSION_FILE="${STATE_DIR}/native-version"
 readonly DOCKER_DIR="/opt/snell"
 readonly DOCKER_COMPOSE_FILE="${DOCKER_DIR}/docker-compose.yml"
 readonly DOCKER_ENV_FILE="${DOCKER_DIR}/.env"
@@ -355,7 +356,7 @@ ensure_native_dependencies() {
     if ((${#missing[@]} == 0)); then
         return 0
     fi
-    pm=$(get_package_manager)
+    pm=$(get_package_manager) || return 1
     case "$pm" in
         apt) install_packages "$pm" ca-certificates curl unzip iproute2 openssl procps ;;
         dnf|yum) install_packages "$pm" ca-certificates curl unzip iproute openssl procps-ng ;;
@@ -363,7 +364,7 @@ ensure_native_dependencies() {
         zypper) install_packages "$pm" ca-certificates curl unzip iproute2 openssl procps ;;
         apk) install_packages "$pm" ca-certificates curl unzip iproute2 openssl procps ;;
         *) error "缺少依赖 (${missing[*]})，且无法识别包管理器。"; return 1 ;;
-    esac
+    esac || return 1
     for command_name in curl unzip ip ss openssl pgrep; do
         command_exists "$command_name" || { error "依赖安装后仍缺少: $command_name"; return 1; }
     done
@@ -734,7 +735,7 @@ backup_file() {
     local file="$1" backup
     [[ -e "$file" ]] || return 0
     backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
-    cp -a "$file" "$backup"
+    cp -a "$file" "$backup" || return 1
     info "已备份: $backup"
 }
 
@@ -1029,9 +1030,9 @@ create_system_user() {
     local nologin
     if ! getent group "$SNELL_GROUP" >/dev/null 2>&1; then
         if command_exists groupadd; then
-            groupadd --system "$SNELL_GROUP"
+            groupadd --system "$SNELL_GROUP" || return 1
         elif command_exists addgroup; then
-            addgroup -S "$SNELL_GROUP"
+            addgroup -S "$SNELL_GROUP" || return 1
         else
             error "找不到 groupadd/addgroup，无法创建 Snell 用户组。"
             return 1
@@ -1040,9 +1041,9 @@ create_system_user() {
     if ! id -u "$SNELL_USER" >/dev/null 2>&1; then
         nologin=$(command -v nologin || printf '/usr/sbin/nologin')
         if command_exists useradd; then
-            useradd --system --gid "$SNELL_GROUP" --home-dir /nonexistent --no-create-home --shell "$nologin" "$SNELL_USER"
+            useradd --system --gid "$SNELL_GROUP" --home-dir /nonexistent --no-create-home --shell "$nologin" "$SNELL_USER" || return 1
         elif command_exists adduser; then
-            adduser -S -D -H -G "$SNELL_GROUP" -s "$nologin" "$SNELL_USER"
+            adduser -S -D -H -G "$SNELL_GROUP" -s "$nologin" "$SNELL_USER" || return 1
         else
             error "找不到 useradd/adduser，无法创建 Snell 用户。"
             return 1
@@ -1052,26 +1053,30 @@ create_system_user() {
 
 write_native_config() {
     local version="$1" tmp
-    mkdir -p "$SNELL_CONFIG_DIR"
-    tmp=$(mktemp "${SNELL_CONFIG_DIR}/snell.conf.tmp.XXXXXX")
-    render_snell_config "$version" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_dns_pref" \
-        "$cfg_egress" "$cfg_obfs" "$cfg_host" "$cfg_mode" > "$tmp"
-    chown "$SNELL_USER:$SNELL_GROUP" "$tmp"
-    chmod 640 "$tmp"
-    mv -f "$tmp" "$SNELL_CONFIG_FILE"
+    mkdir -p "$SNELL_CONFIG_DIR" || return 1
+    tmp=$(mktemp "${SNELL_CONFIG_DIR}/snell.conf.tmp.XXXXXX") || return 1
+    if ! render_snell_config "$version" "$cfg_port" "$cfg_psk" "$cfg_ipv6" "$cfg_dns" "$cfg_dns_pref" \
+        "$cfg_egress" "$cfg_obfs" "$cfg_host" "$cfg_mode" > "$tmp" \
+        || ! chown "$SNELL_USER:$SNELL_GROUP" "$tmp" \
+        || ! chmod 640 "$tmp" || ! mv -f "$tmp" "$SNELL_CONFIG_FILE"; then
+        rm -f "$tmp"
+        return 1
+    fi
 }
 
 write_native_loglevel() {
     local tmp
     if [[ -z "${cfg_loglevel:-}" ]]; then
-        rm -f "$SNELL_LOGLEVEL_FILE"
+        rm -f "$SNELL_LOGLEVEL_FILE" || return 1
         return 0
     fi
-    tmp=$(mktemp "${SNELL_CONFIG_DIR}/loglevel.tmp.XXXXXX")
-    printf '%s\n' "$cfg_loglevel" > "$tmp"
-    chown "$SNELL_USER:$SNELL_GROUP" "$tmp"
-    chmod 640 "$tmp"
-    mv -f "$tmp" "$SNELL_LOGLEVEL_FILE"
+    tmp=$(mktemp "${SNELL_CONFIG_DIR}/loglevel.tmp.XXXXXX") || return 1
+    if ! printf '%s\n' "$cfg_loglevel" > "$tmp" \
+        || ! chown "$SNELL_USER:$SNELL_GROUP" "$tmp" \
+        || ! chmod 640 "$tmp" || ! mv -f "$tmp" "$SNELL_LOGLEVEL_FILE"; then
+        rm -f "$tmp"
+        return 1
+    fi
 }
 
 write_service_files() {
@@ -1079,7 +1084,7 @@ write_service_files() {
     [[ -n "${cfg_loglevel:-}" ]] && runtime_args="-l $cfg_loglevel $runtime_args"
     SERVICE_KIND="manual"
     if systemd_usable; then
-        cat > "$SNELL_SERVICE_FILE" <<EOF
+        cat > "$SNELL_SERVICE_FILE" <<EOF || return 1
 [Unit]
 Description=Snell Server
 Wants=network-online.target
@@ -1099,24 +1104,24 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload
+        systemctl daemon-reload || return 1
         SERVICE_KIND="systemd"
         return 0
     fi
     if openrc_usable; then
         local openrc_run
         openrc_run=$(command -v openrc-run || printf '/sbin/openrc-run')
-        touch /var/log/snell.log
-        chown "$SNELL_USER:$SNELL_GROUP" /var/log/snell.log
-        chmod 640 /var/log/snell.log
+        touch /var/log/snell.log || return 1
+        chown "$SNELL_USER:$SNELL_GROUP" /var/log/snell.log || return 1
+        chmod 640 /var/log/snell.log || return 1
         {
             printf '#!%s\n' "$openrc_run"
             printf 'name="snell"\ncommand="%s"\ncommand_args="%s"\n' "$SNELL_BIN" "$runtime_args"
             printf 'command_user="%s:%s"\ncommand_background=true\npidfile="/run/$RC_SVCNAME.pid"\n' "$SNELL_USER" "$SNELL_GROUP"
             printf 'output_log="/var/log/snell.log"\nerror_log="/var/log/snell.log"\n'
             printf 'depend() {\n    need net\n    after firewall\n}\n'
-        } > "$SNELL_INIT_FILE"
-        chmod 755 "$SNELL_INIT_FILE"
+        } > "$SNELL_INIT_FILE" || return 1
+        chmod 755 "$SNELL_INIT_FILE" || return 1
         SERVICE_KIND="openrc"
         return 0
     fi
@@ -1143,11 +1148,11 @@ native_start() {
     local listen_port="${cfg_port:-}"
     if [[ "$SERVICE_KIND" == "systemd" ]] || { [[ "$SERVICE_KIND" == "manual" ]] && [[ -f "$SNELL_SERVICE_FILE" ]] && systemd_usable; }; then
         SERVICE_KIND="systemd"
-        systemctl enable --now snell
+        systemctl enable --now snell || return 1
     elif [[ "$SERVICE_KIND" == "openrc" ]] || { [[ "$SERVICE_KIND" == "manual" ]] && [[ -x "$SNELL_INIT_FILE" ]] && openrc_usable; }; then
         SERVICE_KIND="openrc"
         command_exists rc-update && rc-update add snell default >/dev/null 2>&1 || true
-        rc-service snell start
+        rc-service snell start || return 1
     else
         warn "原生 Snell 已安装，请手动运行: ${SNELL_BIN} -c ${SNELL_CONFIG_FILE}"
     fi
@@ -1169,45 +1174,71 @@ native_stop() {
 }
 
 get_native_version() {
+    local version
     [[ -x "$SNELL_BIN" ]] || return 1
-    "$SNELL_BIN" -v 2>&1 \
-        | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+[[:alnum:]._-]*' \
-        | head -n 1 \
-        | sed 's/^v//' \
-        || true
+    if [[ -e "$SNELL_VERSION_FILE" ]]; then
+        version=$(< "$SNELL_VERSION_FILE") || return 1
+        version=$(normalize_version "$version") || return 1
+    else
+        version=$("$SNELL_BIN" -v 2>&1 \
+            | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+[[:alnum:]._-]*' \
+            | head -n 1) || return 1
+        version=$(normalize_version "$version") || return 1
+    fi
+    printf '%s\n' "${version#v}"
+}
+
+record_native_version() {
+    local version temp
+    version=$(normalize_version "$1") || return 1
+    mkdir -p "$STATE_DIR" || return 1
+    temp=$(mktemp "${SNELL_VERSION_FILE}.tmp.XXXXXX") || return 1
+    if ! printf '%s\n' "$version" > "$temp" || ! mv -f "$temp" "$SNELL_VERSION_FILE"; then
+        rm -f "$temp"
+        error "Snell 精确版本记录写入失败。"
+        return 1
+    fi
 }
 
 download_native_binary() {
     local version="$1" arch file official backup temp extract stage
     version="${version#v}"
-    arch=$(get_arch)
+    arch=$(get_arch) || return 1
     file="snell-server-v${version}-linux-${arch}.zip"
     official="${OFFICIAL_BASE}/${file}"
     backup="${BACKUP_BASE}/v${version}/${file}"
-    temp=$(mktemp -d)
+    temp=$(mktemp -d) || return 1
     extract="${temp}/extract"
-    stage=$(mktemp "${SNELL_BIN}.new.XXXXXX")
-    rm -f "$stage"
-    mkdir -p "$extract"
+    stage=$(mktemp "${SNELL_BIN}.new.XXXXXX") || { rm -rf "$temp"; return 1; }
+    if ! mkdir -p "$extract"; then
+        rm -rf "$temp"
+        rm -f "$stage"
+        return 1
+    fi
 
     info "下载 Snell v${version} (${arch})..."
     if ! curl -fL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 2 -o "${temp}/snell.zip" "$official"; then
         info "官方源失败，尝试 GitHub 备份源..."
         if ! curl -fL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 2 -o "${temp}/snell.zip" "$backup"; then
             rm -rf "$temp"
+            rm -f "$stage"
             error "Snell v${version} 下载失败。"
             return 1
         fi
     fi
-    unzip -t "${temp}/snell.zip" >/dev/null
-    unzip -q "${temp}/snell.zip" -d "$extract"
-    [[ -f "${extract}/snell-server" ]] || {
+    if ! unzip -t "${temp}/snell.zip" >/dev/null \
+        || ! unzip -q "${temp}/snell.zip" -d "$extract" \
+        || [[ ! -f "${extract}/snell-server" ]] \
+        || ! install -m 0755 "${extract}/snell-server" "$stage"; then
         rm -rf "$temp"
-        error "压缩包中未找到 snell-server。"
+        rm -f "$stage"
+        error "Snell 压缩包校验、解压或安装失败。"
         return 1
-    }
-    install -m 0755 "${extract}/snell-server" "$stage"
-    rm -rf "$temp"
+    fi
+    if ! rm -rf "$temp"; then
+        rm -f "$stage"
+        return 1
+    fi
     printf '%s\n' "$stage"
 }
 
@@ -1225,22 +1256,32 @@ native_install() {
         fi
         return 0
     fi
-    ensure_native_dependencies
-    create_system_user
+    version=$(normalize_version "$version") || return 1
+    ensure_native_dependencies || return 1
+    create_system_user || return 1
     stage=$(download_native_binary "$version") || return 1
-    native_stop
-    backup_file "$SNELL_BIN"
-    mv -f "$stage" "$SNELL_BIN"
-    backup_file "$SNELL_CONFIG_FILE"
-    write_native_config "$version"
-    write_native_loglevel
-    write_service_files
-    if ! native_start; then
-        error "Snell 文件已安装，但服务启动失败。"
+    old_binary="${stage}.rollback"
+    if ! native_stop || ! backup_file "$SNELL_BIN" \
+        || { [[ -f "$SNELL_BIN" ]] && ! cp -a "$SNELL_BIN" "$old_binary"; } \
+        || ! mv -f "$stage" "$SNELL_BIN"; then
+        rm -f "$stage" "$old_binary"
         return 1
     fi
-    mkdir -p "$STATE_DIR"
-    printf 'native\n' > "$STATE_FILE"
+    if ! backup_file "$SNELL_CONFIG_FILE" || ! write_native_config "$version" \
+        || ! write_native_loglevel || ! write_service_files || ! native_start \
+        || ! mkdir -p "$STATE_DIR" || ! printf 'native\n' > "$STATE_FILE" \
+        || ! record_native_version "$version"; then
+        error "Snell 安装失败，正在回滚二进制。"
+        native_stop || true
+        if [[ -f "$old_binary" ]]; then
+            mv -f "$old_binary" "$SNELL_BIN" || return 1
+            native_start || true
+        else
+            rm -f "$SNELL_BIN"
+        fi
+        return 1
+    fi
+    rm -f "$old_binary"
     success "Snell 原生安装完成。"
     show_install_result "native" "$version"
 }
@@ -1355,22 +1396,27 @@ pull_docker_image() {
 
 write_docker_files() {
     local image="$1" network="$2" temp_env temp_compose
-    mkdir -p "$DOCKER_DIR"
-    backup_file "$DOCKER_ENV_FILE"
-    backup_file "$DOCKER_COMPOSE_FILE"
-    docker_option_values
+    mkdir -p "$DOCKER_DIR" || return 1
+    backup_file "$DOCKER_ENV_FILE" || return 1
+    backup_file "$DOCKER_COMPOSE_FILE" || return 1
+    docker_option_values || return 1
     umask 077
-    temp_env=$(mktemp "${DOCKER_DIR}/.env.tmp.XXXXXX")
-    render_env_file "$cfg_port" "$cfg_psk" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
-        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel" > "$temp_env"
-    chmod 600 "$temp_env"
-    mv -f "$temp_env" "$DOCKER_ENV_FILE"
+    temp_env=$(mktemp "${DOCKER_DIR}/.env.tmp.XXXXXX") || { umask 022; return 1; }
+    if ! render_env_file "$cfg_port" "$cfg_psk" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
+        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel" > "$temp_env" \
+        || ! chmod 600 "$temp_env" || ! mv -f "$temp_env" "$DOCKER_ENV_FILE"; then
+        rm -f "$temp_env"
+        umask 022
+        return 1
+    fi
     umask 022
-    temp_compose=$(mktemp "${DOCKER_DIR}/docker-compose.yml.tmp.XXXXXX")
-    render_compose "$image" "$network" "$cfg_port" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
-        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel" > "$temp_compose"
-    chmod 644 "$temp_compose"
-    mv -f "$temp_compose" "$DOCKER_COMPOSE_FILE"
+    temp_compose=$(mktemp "${DOCKER_DIR}/docker-compose.yml.tmp.XXXXXX") || return 1
+    if ! render_compose "$image" "$network" "$cfg_port" "$docker_dns" "$docker_dns_pref" "$docker_ipv6" \
+        "$docker_egress" "$docker_obfs" "$docker_host" "$docker_mode" "$docker_loglevel" > "$temp_compose" \
+        || ! chmod 644 "$temp_compose" || ! mv -f "$temp_compose" "$DOCKER_COMPOSE_FILE"; then
+        rm -f "$temp_compose"
+        return 1
+    fi
 }
 
 wait_for_docker_container() {
@@ -1400,20 +1446,20 @@ wait_for_docker_container() {
 
 docker_apply() {
     local image="$1" network="$2" recreate="${3:-false}"
-    ensure_docker
+    ensure_docker || return 1
     if docker_container_exists && ! has_docker_install; then
         error "检测到现有 snell 容器；本脚本不迁移旧容器，请先手动清理后重试。"
         return 1
     fi
-    write_docker_files "$image" "$network"
-    compose config >/dev/null
+    write_docker_files "$image" "$network" || return 1
+    compose config >/dev/null || return 1
     if [[ "$recreate" == "true" ]]; then
-        compose down --remove-orphans
+        compose down --remove-orphans || return 1
     fi
-    compose up -d --remove-orphans
+    compose up -d --remove-orphans || return 1
     wait_for_docker_container || { error "Docker 容器启动失败。"; return 1; }
-    mkdir -p "$STATE_DIR"
-    printf 'docker\n' > "$STATE_FILE"
+    mkdir -p "$STATE_DIR" || return 1
+    printf 'docker\n' > "$STATE_FILE" || return 1
     success "Snell Docker 安装/更新完成。"
     show_install_result "docker" "${cfg_effective_version:-latest}" "$image"
 }
@@ -1421,10 +1467,10 @@ docker_apply() {
 docker_install() {
     local tag="$1" network="$2" registry="$3" recreate=false
     title "安装 Snell Docker 版本"
-    ensure_docker
+    ensure_docker || return 1
     has_docker_install && recreate=true
-    pull_docker_image "$tag" "$registry"
-    docker_apply "$selected_image" "$network" "$recreate"
+    pull_docker_image "$tag" "$registry" || return 1
+    docker_apply "$selected_image" "$network" "$recreate" || return 1
 }
 
 has_native_install() {
@@ -1710,10 +1756,10 @@ update_snell() {
     local mode current latest stage old_binary
     mode=$(get_mode) || return 1
     if [[ "$mode" == docker ]]; then
-        docker_config_defaults
-        ensure_docker
-        compose pull
-        compose up -d --remove-orphans
+        docker_config_defaults || return 1
+        ensure_docker || return 1
+        compose pull || return 1
+        compose up -d --remove-orphans || return 1
         wait_for_docker_container || { error "Docker 更新后容器未运行。"; return 1; }
         success "Docker 镜像更新完成。"
         return 0
@@ -1721,22 +1767,30 @@ update_snell() {
 
     current=$(get_native_version || true)
     latest=$(get_latest_version || true)
-    [[ -n "$latest" ]] || { error "无法获取最新版本。"; return 1; }
+    latest=$(normalize_version "$latest") || { error "无法获取最新版本。"; return 1; }
+    latest="${latest#v}"
     printf '当前版本: %s\n最新版本: %s\n' "${current:-未知}" "$latest"
     [[ "$current" == "$latest" ]] && { info "当前已经是最新版本。"; return 0; }
     tui_yesno "是否更新到 v${latest}？" "n" || return 0
     stage=$(download_native_binary "$latest") || return 1
     old_binary="${SNELL_BIN}.rollback"
-    native_stop
-    [[ -f "$SNELL_BIN" ]] && cp -a "$SNELL_BIN" "$old_binary"
-    mv -f "$stage" "$SNELL_BIN"
-    if native_start; then
+    if ! native_stop || { [[ -f "$SNELL_BIN" ]] && ! cp -a "$SNELL_BIN" "$old_binary"; }; then
+        rm -f "$stage"
+        return 1
+    fi
+    if ! mv -f "$stage" "$SNELL_BIN"; then
+        rm -f "$stage"
+        return 1
+    fi
+    if native_start && record_native_version "$latest"; then
         rm -f "$old_binary"
         success "原生 Snell 更新完成。"
     else
-        error "新版本启动失败，正在回滚。"
-        native_stop
-        [[ -f "$old_binary" ]] && mv -f "$old_binary" "$SNELL_BIN"
+        error "新版本启动或版本记录失败，正在回滚。"
+        native_stop || true
+        if [[ -f "$old_binary" ]]; then
+            mv -f "$old_binary" "$SNELL_BIN" || return 1
+        fi
         native_start || true
         return 1
     fi
@@ -1903,7 +1957,7 @@ agent_dry_run() {
 agent_install() {
     local method="$CLI_METHOD"
     NONINTERACTIVE=1
-    validate_agent_config
+    validate_agent_config || return 1
     if [[ "$method" == native && "$CLI_VERSION" == latest ]]; then
         error "native 安装必须使用完整版本号。"
         return 1

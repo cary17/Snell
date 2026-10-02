@@ -19,17 +19,40 @@ major=${version%%.*}
 versions=$(get_official_versions) || { error "Official versions unavailable; formal tags left unchanged."; exit 1; }
 latest=$(tail -n 1 <<< "$versions")
 is_exact_version "$latest" || { error "Invalid official latest version."; exit 1; }
-known_major_versions=$(for record in "$root"/.build-records/v*.txt; do
-    [ -f "$record" ] || continue
-    awk -F= -v major="$major" '$1 == "version" {value=$2; sub(/^v/, "", value); if (value ~ "^" major "\\.") print value}' "$record"
-done
+known_major_versions=$(
+if [[ -n "${SNELL_PUBLISHED_STATE_REF:-}" ]]; then
+    # Read current publication records without replacing the tested checkout.
+    records=$(git -C "$root" ls-tree -r --name-only "$SNELL_PUBLISHED_STATE_REF" -- .build-records) || {
+        error "Published state listing failed."
+        exit 1
+    }
+    while IFS= read -r record; do
+        [[ "$record" == .build-records/v*.txt ]] || continue
+        record_version=$(git -C "$root" show "$SNELL_PUBLISHED_STATE_REF:$record" | awk -F= '$1 == "version" {print $2}') || {
+            error "Published state record read failed: $record."
+            exit 1
+        }
+        is_exact_version "$record_version" || { error "Invalid published state record: $record."; exit 1; }
+        value=${record_version#v}
+        if [[ "$value" == "$major".* ]]; then
+            printf '%s\n' "$value"
+        fi
+    done <<< "$records"
+else
+    for record in "$root"/.build-records/v*.txt; do
+        [ -f "$record" ] || continue
+        awk -F= -v major="$major" '$1 == "version" {value=$2; sub(/^v/, "", value); if (value ~ "^" major "\\.") print value}' "$record" || exit 1
+    done
+fi
 for directory in "$root"/Version/v*; do
     [ -d "$directory" ] || continue
     value=${directory##*/}; value=${value#v}
     if [[ "$value" == "$major".* ]]; then
         printf '%s\n' "$value"
     fi
-done)
+done
+printf '%s\n' "$versions" | awk -v major="$major" '$0 ~ "^" major "\\."'
+) || { error "Known major versions unavailable; formal tags left unchanged."; exit 1; }
 major_latest=$(printf '%s\n' "$known_major_versions" "$version" | sed '/^$/d' | sort_snell_versions | tail -n 1)
 is_exact_version "$major_latest" || { error "No valid known version for major $major."; exit 1; }
 
