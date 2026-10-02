@@ -250,5 +250,5 @@ status=0
 result=$(bash "$root/download-snell.sh" 2>&1) || status=$?
 [[ "$status" == 1 ]]
 grep -q '用法:' <<< "$result"
-! grep -q 'unbound variable' <<< "$result"
+if [[ "$result" == *'unbound variable'* ]]; then exit 1; fi
 printf 'test_regressions.sh: passed\n'
