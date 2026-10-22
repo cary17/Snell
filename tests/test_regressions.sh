@@ -9,6 +9,14 @@ SNELL_SOURCE_ONLY=1 source "$root/Snell.sh"
 [[ "$(printf '%s\n' 6.0.0rc2 6.0.0 6.0.0rc10 6.0.0b4 | sort_snell_versions)" == $'6.0.0b4\n6.0.0rc2\n6.0.0rc10\n6.0.0' ]]
 [[ "$(printf '%s\n' 6.0.0 6.0.0-rc1 | sort_snell_versions | tail -n 1)" == 6.0.0 ]]
 
+# Bridge networking must retain UDP for Snell v5 QUIC, not only TCP.
+bridge_compose=$(render_compose ghcr.io/fixture/snell:v5.0.1 bridge 32000)
+grep -Fxq '      - "${LISTEN}:${LISTEN}/tcp"' <<< "$bridge_compose"
+grep -Fxq '      - "${LISTEN}:${LISTEN}/udp"' <<< "$bridge_compose"
+host_compose=$(render_compose ghcr.io/fixture/snell:v5.0.1 host 32000)
+grep -Fxq '    network_mode: host' <<< "$host_compose"
+if grep -q '^    ports:' <<< "$host_compose"; then exit 1; fi
+
 # Management commands must never execute when an unsupported dry-run is requested.
 for action in update uninstall start stop restart; do
     (
@@ -82,38 +90,114 @@ done
 
 # Run the actual publication script, replacing only network and registry commands.
 (
+    registry_calls=$(mktemp)
+    export registry_calls
+    trap 'rm -f "$registry_calls"' EXIT
     curl() {
         [[ "${FAIL_LOOKUP:-0}" != 1 ]] || return 22
         printf '%s\n' 'snell-server-v5.0.0-linux-amd64.zip' 'snell-server-v5.0.1-linux-amd64.zip' \
             'snell-server-v6.0.0rc10-linux-amd64.zip' 'snell-server-v6.0.0-linux-amd64.zip'
     }
-    docker() { printf 'REGISTRY %s\n' "$*"; }
+    docker() {
+        printf '%s\n' "$*" >> "$registry_calls"
+        if [[ "$*" == *'imagetools inspect'* ]]; then
+            [[ "${MISSING_CANDIDATE:-0}" != 1 ]] || return 1
+            [[ "$*" != *'docker.io/'* || "${DOCKERHUB_MISSING:-0}" != 1 ]] || return 1
+            if [[ "$*" != *'docker.io/'* && "${GHCR_MISMATCH:-0}" == 1 ]] || \
+                [[ "$*" == *'docker.io/'* && "${DOCKERHUB_MISMATCH:-0}" == 1 ]]; then
+                printf 'sha256:%064d\n' 1
+            else
+                printf '%s\n' "$IMAGE_DIGEST"
+            fi
+        fi
+    }
     sleep() { :; }
     export -f curl docker sleep
     export GHCR_OWNER=fixture DOCKER_HUB_USERNAME=fixture
     IMAGE_DIGEST="sha256:$(printf '%064d' 0)"
     export IMAGE_DIGEST
-    for version in v5.0.0 v5.0.1 v6.0.0rc10 v6.0.0 v7.0.0; do
-        result=$(VERSION="$version" bash "$root/scripts/publish-tags.sh")
-        case "$version" in
-            v6.0.0)
-                [[ "$(grep -c '^REGISTRY ' <<< "$result")" == 4 ]]
-                grep -Fq -- '--tag ghcr.io/fixture/snell:latest ' <<< "$result"
-                grep -Fq -- '--tag fixture/snell:latest ' <<< "$result"
-                grep -Fq -- "snell@$IMAGE_DIGEST" <<< "$result" ;;
-            v5.0.1)
-                [[ "$(grep -c '^REGISTRY ' <<< "$result")" == 2 ]]
-                grep -Fq -- '--tag ghcr.io/fixture/snell:v5 ' <<< "$result"
-                ! grep -Fq 'snell:latest' <<< "$result" ;;
-            *) ! grep -q '^REGISTRY ' <<< "$result" ;;
-        esac
+    write_count() {
+        if grep -Fq 'buildx imagetools create' "$registry_calls"; then
+            grep -Fc 'buildx imagetools create' "$registry_calls"
+        else
+            printf '0\n'
+        fi
+    }
+    assert_tag() {
+        grep -Fq -- "--tag $1 " "$registry_calls"
+    }
+    assert_no_tag() {
+        if grep -Fq -- "--tag $1 " "$registry_calls"; then
+            echo "Unexpected formal tag: $1" >&2
+            exit 1
+        fi
+    }
+    assert_no_writes() {
+        [[ "$(write_count)" == 0 ]]
+    }
+    run_publish() {
+        : > "$registry_calls"
+        VERSION=$1 bash "$root/scripts/publish-tags.sh" >/dev/null
+    }
+
+    # v3 is absent from the current official page; records/backups still decide its rolling tag.
+    run_publish v3.0.1
+    [[ "$(write_count)" == 2 ]]
+    assert_tag ghcr.io/fixture/snell:v3.0.1
+    assert_tag ghcr.io/fixture/snell:v3
+    assert_tag docker.io/fixture/snell:v3.0.1
+    assert_tag docker.io/fixture/snell:v3
+
+    run_publish v5.0.0
+    [[ "$(write_count)" == 2 ]]
+    assert_tag ghcr.io/fixture/snell:v5.0.0
+    assert_tag docker.io/fixture/snell:v5.0.0
+    assert_no_tag ghcr.io/fixture/snell:v5
+    assert_no_tag ghcr.io/fixture/snell:latest
+    assert_no_tag docker.io/fixture/snell:v5
+    assert_no_tag docker.io/fixture/snell:latest
+
+    run_publish v5.0.1
+    [[ "$(write_count)" == 2 ]]
+    assert_tag ghcr.io/fixture/snell:v5.0.1
+    assert_tag ghcr.io/fixture/snell:v5
+    assert_tag docker.io/fixture/snell:v5.0.1
+    assert_tag docker.io/fixture/snell:v5
+    assert_no_tag ghcr.io/fixture/snell:latest
+
+    run_publish v6.0.0
+    [[ "$(write_count)" == 2 ]]
+    for repository in ghcr.io/fixture/snell docker.io/fixture/snell; do
+        assert_tag "$repository:v6.0.0"
+        assert_tag "$repository:v6"
+        assert_tag "$repository:latest"
     done
-    result=$(VERSION=v6.0.0 DOCKER_HUB_USERNAME='' bash "$root/scripts/publish-tags.sh")
-    [[ "$(grep -c '^REGISTRY ' <<< "$result")" == 2 ]]
-    status=0
-    result=$(VERSION=v6.0.0 FAIL_LOOKUP=1 bash "$root/scripts/publish-tags.sh" 2>&1) || status=$?
-    [[ "$status" == 1 ]]
-    ! grep -q '^REGISTRY ' <<< "$result"
+
+    : > "$registry_calls"
+    VERSION=v6.0.0 DOCKER_HUB_USERNAME='' bash "$root/scripts/publish-tags.sh" >/dev/null
+    [[ "$(write_count)" == 1 ]]
+    assert_tag ghcr.io/fixture/snell:v6.0.0
+    assert_tag ghcr.io/fixture/snell:v6
+    assert_tag ghcr.io/fixture/snell:latest
+    if grep -Fq 'docker.io/fixture/snell' "$registry_calls"; then
+        echo "Docker Hub was used while disabled" >&2
+        exit 1
+    fi
+
+    for scenario in invalid-input failed-lookup missing-candidate ghcr-mismatch dockerhub-missing dockerhub-mismatch; do
+        : > "$registry_calls"
+        status=0
+        case "$scenario" in
+            invalid-input) VERSION=v6.0.0 IMAGE_DIGEST=invalid bash "$root/scripts/publish-tags.sh" >/dev/null 2>&1 || status=$? ;;
+            failed-lookup) VERSION=v6.0.0 FAIL_LOOKUP=1 bash "$root/scripts/publish-tags.sh" >/dev/null 2>&1 || status=$? ;;
+            missing-candidate) VERSION=v6.0.0 MISSING_CANDIDATE=1 bash "$root/scripts/publish-tags.sh" >/dev/null 2>&1 || status=$? ;;
+            ghcr-mismatch) VERSION=v6.0.0 GHCR_MISMATCH=1 bash "$root/scripts/publish-tags.sh" >/dev/null 2>&1 || status=$? ;;
+            dockerhub-missing) VERSION=v6.0.0 DOCKERHUB_MISSING=1 bash "$root/scripts/publish-tags.sh" >/dev/null 2>&1 || status=$? ;;
+            dockerhub-mismatch) VERSION=v6.0.0 DOCKERHUB_MISMATCH=1 bash "$root/scripts/publish-tags.sh" >/dev/null 2>&1 || status=$? ;;
+        esac
+        [[ "$status" == 1 ]]
+        assert_no_writes
+    done
 )
 
 SNELL_ENTRYPOINT_TEST_MODE=1 sh -c '
@@ -133,5 +217,5 @@ status=0
 result=$(bash "$root/download-snell.sh" 2>&1) || status=$?
 [[ "$status" == 1 ]]
 grep -q '用法:' <<< "$result"
-! grep -q 'unbound variable' <<< "$result"
+if [[ "$result" == *'unbound variable'* ]]; then exit 1; fi
 printf 'test_regressions.sh: passed\n'

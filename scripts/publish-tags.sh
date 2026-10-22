@@ -6,23 +6,95 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SNELL_SOURCE_ONLY=1 source "$root/Snell.sh"
 
 : "${VERSION:?}" "${IMAGE_DIGEST:?}" "${GHCR_OWNER:?}"
-is_exact_version "$VERSION" || exit 1
-[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+is_exact_version "$VERSION" || { error "Invalid Snell version."; exit 1; }
+[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { error "Invalid image digest."; exit 1; }
+[[ "$GHCR_OWNER" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || { error "Invalid GHCR owner."; exit 1; }
+if [[ -n "${DOCKER_HUB_USERNAME:-}" ]] && ! [[ "$DOCKER_HUB_USERNAME" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+    error "Invalid Docker Hub username."
+    exit 1
+fi
 version=${VERSION#v}
 major=${version%%.*}
-# Query again after the image has been built and verified, while the writer lock is held.
-versions=$(get_official_versions) || { error "Official versions unavailable; rolling tags left unchanged."; exit 1; }
+# Complete every read-only gate before writing any formal tag.
+versions=$(get_official_versions) || { error "Official versions unavailable; formal tags left unchanged."; exit 1; }
 latest=$(tail -n 1 <<< "$versions")
-major_latest=$(awk -F. -v major="$major" '$1 == major' <<< "$versions" | tail -n 1)
-tags=()
-[[ "$version" != "$latest" ]] || tags+=(latest)
-[[ "$version" != "$major_latest" ]] || tags+=("v$major")
-for tag in "${tags[@]}"; do
-    docker buildx imagetools create --tag "ghcr.io/$GHCR_OWNER/snell:$tag" \
-        "ghcr.io/$GHCR_OWNER/snell@$IMAGE_DIGEST"
-    if [[ -n "${DOCKER_HUB_USERNAME:-}" ]]; then
-        docker buildx imagetools create --tag "$DOCKER_HUB_USERNAME/snell:$tag" \
-            "$DOCKER_HUB_USERNAME/snell@$IMAGE_DIGEST"
+is_exact_version "$latest" || { error "Invalid official latest version."; exit 1; }
+known_major_versions=$(
+if [[ -n "${SNELL_PUBLISHED_STATE_REF:-}" ]]; then
+    # Read current publication records without replacing the tested checkout.
+    records=$(git -C "$root" ls-tree -r --name-only "$SNELL_PUBLISHED_STATE_REF" -- .build-records) || {
+        error "Published state listing failed."
+        exit 1
+    }
+    while IFS= read -r record; do
+        [[ "$record" == .build-records/v*.txt ]] || continue
+        record_version=$(git -C "$root" show "$SNELL_PUBLISHED_STATE_REF:$record" | awk -F= '$1 == "version" {print $2}') || {
+            error "Published state record read failed: $record."
+            exit 1
+        }
+        is_exact_version "$record_version" || { error "Invalid published state record: $record."; exit 1; }
+        value=${record_version#v}
+        if [[ "$value" == "$major".* ]]; then
+            printf '%s\n' "$value"
+        fi
+    done <<< "$records"
+else
+    for record in "$root"/.build-records/v*.txt; do
+        [ -f "$record" ] || continue
+        awk -F= -v major="$major" '$1 == "version" {value=$2; sub(/^v/, "", value); if (value ~ "^" major "\\.") print value}' "$record" || exit 1
+    done
+fi
+for directory in "$root"/Version/v*; do
+    [ -d "$directory" ] || continue
+    value=${directory##*/}; value=${value#v}
+    if [[ "$value" == "$major".* ]]; then
+        printf '%s\n' "$value"
     fi
 done
-printf 'Official latest: v%s; published rolling tags: %s\n' "$latest" "${tags[*]:-none}"
+printf '%s\n' "$versions" | awk -v major="$major" '$0 ~ "^" major "\\."'
+) || { error "Known major versions unavailable; formal tags left unchanged."; exit 1; }
+major_latest=$(printf '%s\n' "$known_major_versions" "$version" | sed '/^$/d' | sort_snell_versions | tail -n 1)
+is_exact_version "$major_latest" || { error "No valid known version for major $major."; exit 1; }
+
+ghcr_repo="ghcr.io/$GHCR_OWNER/snell"
+dockerhub_repo=""
+if [[ -n "${DOCKER_HUB_USERNAME:-}" ]]; then
+    dockerhub_repo="docker.io/$DOCKER_HUB_USERNAME/snell"
+fi
+
+verify_candidate() {
+    local repository=$1 actual_digest
+    actual_digest=$(docker buildx imagetools inspect "$repository@$IMAGE_DIGEST" --format '{{.Manifest.Digest}}') || {
+        error "Candidate digest is unavailable in $repository."
+        return 1
+    }
+    [[ "$actual_digest" == "$IMAGE_DIGEST" ]] || {
+        error "Candidate digest mismatch in $repository."
+        return 1
+    }
+}
+
+verify_candidate "$ghcr_repo"
+[[ -z "$dockerhub_repo" ]] || verify_candidate "$dockerhub_repo"
+
+tags=("v$version")
+[[ "$version" != "$major_latest" ]] || tags+=("v$major")
+[[ "$version" != "$latest" ]] || tags+=(latest)
+
+publish_repository() {
+    local repository=$1 tag
+    local -a tag_args=()
+    for tag in "${tags[@]}"; do
+        tag_args+=(--tag "$repository:$tag")
+    done
+    docker buildx imagetools create "${tag_args[@]}" "$repository@$IMAGE_DIGEST"
+}
+
+publish_repository "$ghcr_repo"
+[[ -z "$dockerhub_repo" ]] || publish_repository "$dockerhub_repo"
+
+printf 'Official latest: v%s; published tags: %s\n' "$latest" "${tags[*]}"
+printf 'docker pull %s:v%s\n' "$ghcr_repo" "$version"
+if [[ -n "$dockerhub_repo" ]]; then
+    printf 'docker pull %s:v%s\n' "$dockerhub_repo" "$version"
+fi
