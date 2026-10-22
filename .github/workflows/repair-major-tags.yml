@@ -1,0 +1,44 @@
+name: Repair Snell major tags
+
+on:
+  workflow_dispatch:
+    inputs:
+      major:
+        description: '主版本号（留空表示全部回填）'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: snell-repository-writer
+      cancel-in-progress: false
+    env:
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: 登录 GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 登录 Docker Hub
+        if: env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME != ''
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ env.DOCKER_HUB_USERNAME }}
+          password: ${{ env.DOCKER_HUB_TOKEN }}
+      - name: 回填主版本标签
+        env:
+          GHCR_OWNER: ${{ github.repository_owner }}
+          MAJOR: ${{ github.event.inputs.major }}
+          DOCKER_HUB_USERNAME: ${{ env.DOCKER_HUB_TOKEN != '' && env.DOCKER_HUB_USERNAME || '' }}
+        run: bash scripts/repair-major-tags.sh

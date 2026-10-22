@@ -22,15 +22,15 @@ versions="$tmp/versions"
 
 validate_archive() {
     local archive=$1 arch=$2 file=$3 extract_dir entries machine class
-    entries=$(unzip -Z1 "$archive")
+    entries=$(unzip -Z1 "$archive") || return 1
     [ "$entries" = snell-server ] || { echo "Unexpected ZIP contents: $file" >&2; return 1; }
     extract_dir="$tmp/extract-$arch"
-    rm -rf "$extract_dir"
-    mkdir -p "$extract_dir"
-    unzip -q "$archive" -d "$extract_dir"
+    rm -rf "$extract_dir" || return 1
+    mkdir -p "$extract_dir" || return 1
+    unzip -q "$archive" -d "$extract_dir" || return 1
     [ -x "$extract_dir/snell-server" ] || { echo "Non-executable binary: $file" >&2; return 1; }
-    machine=$(LC_ALL=C readelf -h "$extract_dir/snell-server" | awk -F: '/Machine:/ {sub(/^[[:space:]]+/, "", $2); print $2}')
-    class=$(LC_ALL=C readelf -h "$extract_dir/snell-server" | awk -F: '/Class:/ {sub(/^[[:space:]]+/, "", $2); print $2}')
+    machine=$(LC_ALL=C readelf -h "$extract_dir/snell-server" | awk -F: '/Machine:/ {sub(/^[[:space:]]+/, "", $2); print $2}') || return 1
+    class=$(LC_ALL=C readelf -h "$extract_dir/snell-server" | awk -F: '/Class:/ {sub(/^[[:space:]]+/, "", $2); print $2}') || return 1
     case "$arch:$class:$machine" in
         amd64:ELF64:*X86-64*|i386:ELF32:*Intel*80386*|aarch64:ELF64:*AArch64*|armv7l:ELF32:*ARM*) ;;
         *) echo "Architecture mismatch for $file: $class $machine" >&2; return 1 ;;
